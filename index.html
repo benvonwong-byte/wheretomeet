@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WHERE2MEET — NYC fair meeting zones</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..900&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="rail">
+        <header class="brand">
+          <div class="brand-mark">
+            <span class="bullet bullet-a">A</span><span class="bullet bullet-b">B</span>
+          </div>
+          <h1>WHERE<em>2</em>MEET</h1>
+          <p class="tagline">Fair meeting zones · New York City</p>
+        </header>
+
+        <section class="person" data-person="A">
+          <div class="person-head">
+            <span class="bullet bullet-a">A</span>
+            <input id="addr-a" type="text" placeholder="Person A address…" autocomplete="off" />
+          </div>
+          <div class="modes" id="modes-a"></div>
+        </section>
+
+        <section class="person" data-person="B">
+          <div class="person-head">
+            <span class="bullet bullet-b">B</span>
+            <input id="addr-b" type="text" placeholder="Person B address…" autocomplete="off" />
+          </div>
+          <div class="modes" id="modes-b"></div>
+        </section>
+
+        <section class="panel" id="layers-panel">
+          <h2>Fair-zone layers</h2>
+          <div id="layers"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Find places</h2>
+          <div class="filters" id="cat-filters"></div>
+          <div class="filters hero-filters" id="diet-filters"></div>
+        </section>
+
+        <section class="panel venues-panel">
+          <h2 id="venues-head">Best spots</h2>
+          <ol id="venues"></ol>
+        </section>
+
+        <footer class="credits">
+          Data © OpenStreetMap · Times are estimates
+        </footer>
+      </aside>
+      <main id="map"></main>
+      <div id="status" hidden></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,356 @@
+import L from 'leaflet';
+import './style.css';
+import venuesData from './data/venues.json';
+import subwayData from './data/subway.json';
+import { NYC_GRID } from './lib/geo';
+import { buildGraph } from './lib/transit';
+import { timeField, comboLayer, averageLayers, scoreAtPoint } from './lib/fairness';
+import { renderHeat } from './lib/heat';
+import { filterVenues } from './lib/venues';
+import { geocode } from './lib/geocode';
+import type { Pt, Mode, Venue, ComboLayer, TimeField } from './lib/types';
+
+// ── Static data ──────────────────────────────────────────────
+const VENUES = (venuesData as { venues: Venue[] }).venues;
+const GRAPH = buildGraph(subwayData as { stations: { name: string; lat: number; lng: number }[]; routes: { ref: string; stops: number[] }[] });
+const GRID = NYC_GRID;
+const CELLS = GRID.rows * GRID.cols;
+
+const MODES: { id: Mode; label: string }[] = [
+  { id: 'transit', label: 'SUBWAY' },
+  { id: 'bike', label: 'BIKE' },
+  { id: 'car', label: 'CAR' },
+  { id: 'walk', label: 'WALK' },
+];
+const MODE_LABEL = Object.fromEntries(MODES.map((m) => [m.id, m.label])) as Record<Mode, string>;
+
+// ── State ────────────────────────────────────────────────────
+interface Person {
+  pt: Pt;
+  modes: Set<Mode>;
+}
+
+const state = {
+  A: { pt: { lat: 40.7143, lng: -73.9614 }, modes: new Set<Mode>(['transit', 'bike']) } as Person,
+  B: { pt: { lat: 40.787, lng: -73.9754 }, modes: new Set<Mode>(['transit', 'car']) } as Person,
+  layerOff: new Set<string>(), // combo keys the user toggled off
+  cats: new Set<Venue['cat']>(['restaurant', 'cafe', 'activity']),
+  veganOnly: false,
+  veganFriendly: true,
+  tea: true,
+};
+
+const fieldCache = new Map<string, TimeField>();
+
+function getField(who: 'A' | 'B', mode: Mode): TimeField {
+  const key = `${who}:${mode}`;
+  let f = fieldCache.get(key);
+  if (!f) {
+    f = timeField(GRAPH, state[who].pt, mode, GRID);
+    fieldCache.set(key, f);
+  }
+  return f;
+}
+
+const comboKey = (a: Mode, b: Mode) => `${a}|${b}`;
+
+function activeCombos(): { a: Mode; b: Mode; key: string; on: boolean }[] {
+  const out: { a: Mode; b: Mode; key: string; on: boolean }[] = [];
+  for (const m of MODES) {
+    if (!state.A.modes.has(m.id)) continue;
+    for (const n of MODES) {
+      if (!state.B.modes.has(n.id)) continue;
+      const key = comboKey(m.id, n.id);
+      out.push({ a: m.id, b: n.id, key, on: !state.layerOff.has(key) });
+    }
+  }
+  return out;
+}
+
+// ── Map ──────────────────────────────────────────────────────
+const map = L.map('map', { zoomControl: false }).setView([40.745, -73.96], 12);
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+  attribution: '© OpenStreetMap contributors © CARTO',
+  maxZoom: 19,
+}).addTo(map);
+
+const HEAT_BOUNDS = L.latLngBounds([GRID.latMin, GRID.lngMin], [GRID.latMax, GRID.lngMax]);
+let heatOverlay: L.ImageOverlay | null = null;
+const venueLayer = L.layerGroup().addTo(map);
+
+function bulletIcon(who: 'A' | 'B'): L.DivIcon {
+  return L.divIcon({
+    className: '',
+    html: `<div class="marker-bullet ${who.toLowerCase()}">${who}</div>`,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+  });
+}
+
+function makePersonMarker(who: 'A' | 'B'): L.Marker {
+  const marker = L.marker(state[who].pt, { icon: bulletIcon(who), draggable: true }).addTo(map);
+  marker.on('dragend', () => {
+    const ll = marker.getLatLng();
+    state[who].pt = { lat: ll.lat, lng: ll.lng };
+    fieldCache.delete(`${who}:transit`);
+    fieldCache.delete(`${who}:bike`);
+    fieldCache.delete(`${who}:car`);
+    fieldCache.delete(`${who}:walk`);
+    (document.getElementById(`addr-${who.toLowerCase()}`) as HTMLInputElement).value = '';
+    scheduleRecompute();
+  });
+  return marker;
+}
+
+const markers = { A: makePersonMarker('A'), B: makePersonMarker('B') };
+
+// ── UI: mode pills ───────────────────────────────────────────
+function renderModes(who: 'A' | 'B'): void {
+  const el = document.getElementById(`modes-${who.toLowerCase()}`)!;
+  el.innerHTML = '';
+  for (const m of MODES) {
+    const btn = document.createElement('button');
+    btn.className = 'mode-pill' + (state[who].modes.has(m.id) ? ' on' : '');
+    btn.textContent = m.label;
+    btn.onclick = () => {
+      const set = state[who].modes;
+      if (set.has(m.id)) {
+        if (set.size === 1) return; // keep at least one mode
+        set.delete(m.id);
+      } else {
+        set.add(m.id);
+      }
+      renderModes(who);
+      scheduleRecompute();
+    };
+    el.appendChild(btn);
+  }
+}
+
+// ── UI: layer legend ─────────────────────────────────────────
+function renderLayers(): void {
+  const el = document.getElementById('layers')!;
+  el.innerHTML = '';
+  for (const c of activeCombos()) {
+    const row = document.createElement('div');
+    row.className = 'layer-row' + (c.on ? '' : ' off');
+    row.innerHTML =
+      `<span class="sw"></span>` +
+      `<span class="bullet bullet-a mini">A</span><span class="lbl">${MODE_LABEL[c.a]}</span>` +
+      `<span class="lbl">×</span>` +
+      `<span class="bullet bullet-b mini">B</span><span class="lbl">${MODE_LABEL[c.b]}</span>`;
+    row.onclick = () => {
+      if (state.layerOff.has(c.key)) state.layerOff.delete(c.key);
+      else state.layerOff.add(c.key);
+      scheduleRecompute();
+    };
+    el.appendChild(row);
+  }
+}
+
+// ── UI: filters ──────────────────────────────────────────────
+const CATS: { id: Venue['cat']; label: string }[] = [
+  { id: 'restaurant', label: 'RESTAURANTS' },
+  { id: 'cafe', label: 'CAFES' },
+  { id: 'activity', label: 'ACTIVITIES' },
+];
+
+function renderCatFilters(): void {
+  const el = document.getElementById('cat-filters')!;
+  el.innerHTML = '';
+  for (const c of CATS) {
+    const chip = document.createElement('button');
+    chip.className = 'chip' + (state.cats.has(c.id) ? ' on' : '');
+    chip.textContent = c.label;
+    chip.onclick = () => {
+      if (state.cats.has(c.id)) state.cats.delete(c.id);
+      else state.cats.add(c.id);
+      renderCatFilters();
+      scheduleRecompute(true);
+    };
+    el.appendChild(chip);
+  }
+}
+
+function renderDietFilters(): void {
+  const el = document.getElementById('diet-filters')!;
+  el.innerHTML = '';
+  const defs = [
+    { key: 'veganFriendly' as const, label: '🌱 VEGAN-FRIENDLY', cls: 'vegan' },
+    { key: 'veganOnly' as const, label: '🌱 FULLY VEGAN', cls: 'vegan' },
+    { key: 'tea' as const, label: '🍵 TEA', cls: 'tea' },
+  ];
+  for (const d of defs) {
+    const chip = document.createElement('button');
+    chip.className = `chip hero ${d.cls}` + (state[d.key] ? ' on' : '');
+    chip.textContent = d.label;
+    chip.onclick = () => {
+      state[d.key] = !state[d.key];
+      renderDietFilters();
+      scheduleRecompute(true);
+    };
+    el.appendChild(chip);
+  }
+}
+
+// ── UI: geocode inputs ───────────────────────────────────────
+function wireInput(who: 'A' | 'B'): void {
+  const input = document.getElementById(`addr-${who.toLowerCase()}`) as HTMLInputElement;
+  input.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter' || !input.value.trim()) return;
+    setStatus('Locating…');
+    const hit = await geocode(input.value.trim() + ', New York City');
+    if (!hit) {
+      setStatus('Address not found', 2200);
+      return;
+    }
+    input.value = hit.label;
+    state[who].pt = hit.pt;
+    for (const m of MODES) fieldCache.delete(`${who}:${m.id}`);
+    markers[who].setLatLng(hit.pt);
+    scheduleRecompute();
+  });
+}
+
+// ── Status toast ─────────────────────────────────────────────
+const statusEl = document.getElementById('status')!;
+let statusTimer = 0;
+
+function setStatus(msg: string, autoHide = 0): void {
+  statusEl.textContent = msg;
+  statusEl.hidden = false;
+  window.clearTimeout(statusTimer);
+  if (autoHide) statusTimer = window.setTimeout(() => (statusEl.hidden = true), autoHide);
+}
+
+// ── Recompute pipeline ───────────────────────────────────────
+let pending = 0;
+
+function scheduleRecompute(venuesOnly = false): void {
+  window.clearTimeout(pending);
+  setStatus('Computing fair zones…');
+  pending = window.setTimeout(() => recompute(venuesOnly), 30);
+}
+
+let lastLayers: ComboLayer[] = [];
+
+function recompute(venuesOnly: boolean): void {
+  renderLayers();
+  if (!venuesOnly || lastLayers.length === 0) {
+    const combos = activeCombos().filter((c) => c.on);
+    lastLayers = combos.map((c) => comboLayer(c.a, c.b, getField('A', c.a), getField('B', c.b)));
+    const avg = averageLayers(lastLayers, CELLS);
+    const canvas = renderHeat(avg, GRID);
+    const url = canvas.toDataURL();
+    if (heatOverlay) heatOverlay.setUrl(url);
+    else {
+      heatOverlay = L.imageOverlay(url, HEAT_BOUNDS, {
+        opacity: 0.62,
+        className: 'heat-img',
+        interactive: false,
+      }).addTo(map);
+    }
+  }
+  renderVenues();
+  setStatus('Ready', 900);
+}
+
+// ── Venues ───────────────────────────────────────────────────
+const gmaps = (v: Venue) =>
+  `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${v.name} ${v.addr || ''} New York`)}`;
+
+function venueTags(v: Venue): string {
+  const tags: string[] = [];
+  if (v.vegan === 2) tags.push('<span class="tag vegan2">100% vegan</span>');
+  else if (v.vegan === 1) tags.push('<span class="tag vegan1">vegan-friendly</span>');
+  if (v.tea) tags.push('<span class="tag tea">tea</span>');
+  tags.push(`<span class="tag">${v.cat}</span>`);
+  return tags.join('');
+}
+
+function popupHtml(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB: number }[]): string {
+  const rows = combos
+    .map(
+      (c) =>
+        `<div><span class="ca">A·${MODE_LABEL[c.modeA]} ${Math.round(c.tA)}′</span> · ` +
+        `<span class="cb">B·${MODE_LABEL[c.modeB]} ${Math.round(c.tB)}′</span> · ` +
+        `Δ${Math.round(Math.abs(c.tA - c.tB))}′</div>`,
+    )
+    .join('');
+  return (
+    `<div class="pop-name">${v.name}</div>` +
+    `<div class="pop-addr">${v.addr || v.cuisine || v.cat}</div>` +
+    `<div class="pop-times">${rows}</div>` +
+    `<a class="pop-link" href="${gmaps(v)}" target="_blank" rel="noopener">Open in Google Maps ↗</a>`
+  );
+}
+
+function heatColor(t: number): string {
+  if (t > 0.8) return '#ff2d78';
+  if (t > 0.6) return '#ff7043';
+  if (t > 0.4) return '#ffb500';
+  return '#8b919c';
+}
+
+function renderVenues(): void {
+  venueLayer.clearLayers();
+  const listEl = document.getElementById('venues')!;
+  const headEl = document.getElementById('venues-head')!;
+  listEl.innerHTML = '';
+
+  const filtered = filterVenues(VENUES, {
+    categories: state.cats,
+    veganOnly: state.veganOnly,
+    veganFriendly: state.veganFriendly,
+    tea: state.tea,
+  });
+
+  const scored = filtered
+    .map((v) => ({ v, s: scoreAtPoint(GRID, lastLayers, v) }))
+    .filter((x): x is { v: Venue; s: NonNullable<ReturnType<typeof scoreAtPoint>> } => x.s !== null && x.s.score > 0.001)
+    .sort((a, b) => b.s.score - a.s.score)
+    .slice(0, 40);
+
+  headEl.textContent = `Best spots · ${scored.length}`;
+
+  if (!scored.length) {
+    listEl.innerHTML = '<li class="empty">No venues in the fair zone — widen filters or move a pin.</li>';
+    return;
+  }
+
+  const maxScore = scored[0].s.score;
+  for (const { v, s } of scored) {
+    const best = s.combos.reduce((p, c) => (Math.abs(c.tA - c.tB) < Math.abs(p.tA - p.tB) ? c : p));
+    const dot = L.circleMarker([v.lat, v.lng], {
+      radius: 6,
+      color: '#fff',
+      weight: 1.5,
+      fillColor: heatColor(s.score / maxScore),
+      fillOpacity: 0.95,
+      className: 'venue-dot',
+    })
+      .bindPopup(popupHtml(v, s.combos))
+      .addTo(venueLayer);
+
+    const li = document.createElement('li');
+    li.innerHTML =
+      `<span class="v-name">${v.name}</span>` +
+      `<span class="v-times"><b class="ta">${Math.round(best.tA)}′</b>/<b class="tb">${Math.round(best.tB)}′</b></span>` +
+      `<span class="v-tags">${venueTags(v)}</span>`;
+    li.onclick = () => {
+      map.setView([v.lat, v.lng], Math.max(map.getZoom(), 14));
+      dot.openPopup();
+    };
+    listEl.appendChild(li);
+  }
+}
+
+// ── Boot ─────────────────────────────────────────────────────
+renderModes('A');
+renderModes('B');
+renderCatFilters();
+renderDietFilters();
+wireInput('A');
+wireInput('B');
+scheduleRecompute();
