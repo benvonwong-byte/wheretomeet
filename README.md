@@ -41,6 +41,26 @@ permanently-closed removal come from Google Places. One-time setup:
 
 The UI renders stars/price/photos automatically once the data is present.
 
+## Local routing backup (public OSRM/Valhalla servers are flaky)
+
+Street-routed venue times try three tiers: **local OSRM → public OSRM → public Valhalla**.
+The local tier is a self-hosted OSRM on the NYC extract — no keys, no internet, ~2GB disk:
+
+```sh
+brew install osrm-backend
+mkdir -p routing && curl -Lo routing/NewYork.osm.pbf \
+  https://download.bbbike.org/osm/bbbike/NewYork/NewYork.osm.pbf
+PROFILES="$(brew --prefix)/share/osrm/profiles"
+for p in car bicycle foot; do
+  mkdir -p routing/$p && cp routing/NewYork.osm.pbf routing/$p/
+  (cd routing/$p && osrm-extract -p "$PROFILES/$p.lua" NewYork.osm.pbf &&
+   osrm-partition NewYork.osrm && osrm-customize NewYork.osrm && rm NewYork.osm.pbf)
+done
+./scripts/routing-servers.sh   # car :5001, bike :5002, foot :5003
+```
+
+Vite proxies `/osrm/{car,bike,foot}` to those ports, so the browser stays same-origin.
+
 ## Swapping in commercial APIs
 
 The travel engine is a pure function `timeField(graph, origin, mode, grid)` — to use TravelTime API isochrones or Google Maps instead, replace that one call site behind a server proxy. Leaflet/CARTO tiles swap to Google Maps with an API key.

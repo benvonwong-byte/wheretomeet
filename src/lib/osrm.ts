@@ -15,16 +15,37 @@ const VALHALLA_COSTING: Partial<Record<Mode, string>> = {
   walk: 'pedestrian',
 };
 
+// Local self-hosted OSRM (scripts/routing-servers.sh), proxied by Vite.
+const LOCAL_PATH: Partial<Record<Mode, string>> = {
+  bike: '/osrm/bike',
+  car: '/osrm/car',
+  walk: '/osrm/foot',
+};
+
+function parseOsrm(json: { code: string; durations?: (number | null)[][] }): (number | null)[] | null {
+  if (json.code !== 'Ok' || !json.durations?.[0]) return null;
+  return json.durations[0].slice(1).map((sec) => (sec == null ? null : sec / 60));
+}
+
+const tableQuery = (origin: Pt, dests: Pt[]) =>
+  '/table/v1/driving/' +
+  [origin, ...dests].map((p) => `${p.lng.toFixed(6)},${p.lat.toFixed(6)}`).join(';') +
+  '?sources=0&annotations=duration';
+
+async function localTable(origin: Pt, dests: Pt[], mode: Mode, signal?: AbortSignal): Promise<(number | null)[] | null> {
+  const base = LOCAL_PATH[mode];
+  if (!base) return null;
+  const res = await fetch(base + tableQuery(origin, dests), { signal });
+  if (!res.ok) return null;
+  return parseOsrm(await res.json());
+}
+
 async function osrmTable(origin: Pt, dests: Pt[], mode: Mode, signal?: AbortSignal): Promise<(number | null)[] | null> {
   const profile = PROFILE[mode];
   if (!profile) return null;
-  const coords = [origin, ...dests].map((p) => `${p.lng.toFixed(6)},${p.lat.toFixed(6)}`).join(';');
-  const url = `https://routing.openstreetmap.de/${profile}/table/v1/driving/${coords}?sources=0&annotations=duration`;
-  const res = await fetch(url, { signal });
+  const res = await fetch(`https://routing.openstreetmap.de/${profile}` + tableQuery(origin, dests), { signal });
   if (!res.ok) return null;
-  const json = (await res.json()) as { code: string; durations?: (number | null)[][] };
-  if (json.code !== 'Ok' || !json.durations?.[0]) return null;
-  return json.durations[0].slice(1).map((sec) => (sec == null ? null : sec / 60));
+  return parseOsrm(await res.json());
 }
 
 async function valhallaTable(origin: Pt, dests: Pt[], mode: Mode, signal?: AbortSignal): Promise<(number | null)[] | null> {
@@ -49,8 +70,9 @@ async function valhallaTable(origin: Pt, dests: Pt[], mode: Mode, signal?: Abort
 
 /**
  * One matrix request: origin → each destination via real street pathing.
- * Tries OSRM, falls back to Valhalla. Minutes include the mode's fixed
- * overhead (parking etc.). Null on total failure — caller keeps model times.
+ * Tier order: local self-hosted OSRM → public OSRM → public Valhalla.
+ * Minutes include the mode's fixed overhead (parking etc.).
+ * Null on total failure — caller keeps model times.
  */
 export async function routedMinutes(
   origin: Pt,
@@ -60,17 +82,13 @@ export async function routedMinutes(
 ): Promise<(number | null)[] | null> {
   if (dests.length === 0 || !(mode in PROFILE)) return null;
   let mins: (number | null)[] | null = null;
-  try {
-    mins = await osrmTable(origin, dests, mode, signal);
-  } catch {
-    /* fall through */
-  }
-  if (!mins) {
+  for (const tier of [localTable, osrmTable, valhallaTable]) {
     try {
-      mins = await valhallaTable(origin, dests, mode, signal);
+      mins = await tier(origin, dests, mode, signal);
     } catch {
-      return null;
+      mins = null;
     }
+    if (mins) break;
   }
   if (!mins) return null;
   const overhead = mode in MODE_PARAMS ? MODE_PARAMS[mode as keyof typeof MODE_PARAMS].overhead : 0;
