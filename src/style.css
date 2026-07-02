@@ -520,3 +520,46 @@ body {
   }
 }
 .heat-img { filter: blur(2px) saturate(1.15); image-rendering: auto; }
+
+/* ── Autocomplete ─────────────────────── */
+.person-head {
+  position: relative;
+}
+
+.person input.bad {
+  border-color: #e04545;
+}
+
+.suggest {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 36px;
+  right: 0;
+  z-index: 1200;
+  background: var(--rail-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.suggest-row {
+  padding: 9px 12px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.suggest-row:last-child {
+  border-bottom: none;
+}
+
+.suggest-row:hover,
+.suggest-row.sel {
+  background: var(--paper);
+  color: var(--ink);
+}

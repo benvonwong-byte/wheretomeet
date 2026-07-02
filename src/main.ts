@@ -7,7 +7,7 @@ import { buildGraph } from './lib/transit';
 import { timeField, comboLayer, averageLayers, scoreAtPoint } from './lib/fairness';
 import { renderHeat } from './lib/heat';
 import { filterVenues } from './lib/venues';
-import { geocode } from './lib/geocode';
+import { geocode, makeSuggester, type GeoHit } from './lib/geocode';
 import type { Pt, Mode, Venue, ComboLayer, TimeField } from './lib/types';
 
 // ── Static data ──────────────────────────────────────────────
@@ -194,22 +194,90 @@ function renderDietFilters(): void {
   }
 }
 
-// ── UI: geocode inputs ───────────────────────────────────────
+// ── UI: geocode inputs with autocomplete ─────────────────────
+function applyLocation(who: 'A' | 'B', hit: GeoHit, input: HTMLInputElement): void {
+  input.value = hit.label;
+  input.classList.remove('bad');
+  state[who].pt = hit.pt;
+  for (const m of MODES) fieldCache.delete(`${who}:${m.id}`);
+  markers[who].setLatLng(hit.pt);
+  map.panTo(hit.pt);
+  scheduleRecompute();
+}
+
 function wireInput(who: 'A' | 'B'): void {
   const input = document.getElementById(`addr-${who.toLowerCase()}`) as HTMLInputElement;
+  const drop = document.createElement('div');
+  drop.className = 'suggest';
+  drop.hidden = true;
+  input.parentElement!.appendChild(drop);
+
+  let hits: GeoHit[] = [];
+  let sel = -1;
+
+  const close = () => {
+    drop.hidden = true;
+    sel = -1;
+  };
+
+  const renderDrop = () => {
+    drop.innerHTML = '';
+    drop.hidden = hits.length === 0;
+    hits.forEach((h, i) => {
+      const row = document.createElement('div');
+      row.className = 'suggest-row' + (i === sel ? ' sel' : '');
+      row.textContent = h.label;
+      row.onmousedown = (e) => {
+        e.preventDefault(); // beat the blur
+        close();
+        applyLocation(who, h, input);
+      };
+      drop.appendChild(row);
+    });
+  };
+
+  const suggester = makeSuggester((results) => {
+    hits = results;
+    sel = -1;
+    renderDrop();
+  });
+
+  input.addEventListener('input', () => {
+    input.classList.remove('bad');
+    suggester(input.value);
+  });
+
+  input.addEventListener('blur', () => window.setTimeout(close, 150));
+
   input.addEventListener('keydown', async (e) => {
-    if (e.key !== 'Enter' || !input.value.trim()) return;
-    setStatus('Locating…');
-    const hit = await geocode(input.value.trim() + ', New York City');
-    if (!hit) {
-      setStatus('Address not found', 2200);
-      return;
+    if (e.key === 'ArrowDown' && hits.length) {
+      e.preventDefault();
+      sel = (sel + 1) % hits.length;
+      renderDrop();
+    } else if (e.key === 'ArrowUp' && hits.length) {
+      e.preventDefault();
+      sel = (sel - 1 + hits.length) % hits.length;
+      renderDrop();
+    } else if (e.key === 'Escape') {
+      close();
+    } else if (e.key === 'Enter') {
+      if (!input.value.trim()) return;
+      const picked = sel >= 0 ? hits[sel] : hits[0];
+      close();
+      if (picked) {
+        applyLocation(who, picked, input);
+        return;
+      }
+      // No suggestions — precise Nominatim fallback.
+      setStatus('Locating…');
+      const hit = await geocode(input.value.trim());
+      if (!hit) {
+        setStatus('Address not found — try adding a borough', 2600);
+        input.classList.add('bad');
+        return;
+      }
+      applyLocation(who, hit, input);
     }
-    input.value = hit.label;
-    state[who].pt = hit.pt;
-    for (const m of MODES) fieldCache.delete(`${who}:${m.id}`);
-    markers[who].setLatLng(hit.pt);
-    scheduleRecompute();
   });
 }
 
