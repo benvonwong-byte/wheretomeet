@@ -37,13 +37,23 @@ function baseCategory(key, tags) {
   return key === 'vegan' ? 'restaurant' : 'cafe';
 }
 
+function isClosed(t) {
+  // OSM lifecycle markers for defunct places.
+  if (t.disused === 'yes' || t.abandoned === 'yes') return true;
+  if (t['disused:amenity'] || t['abandoned:amenity'] || t['was:amenity']) return true;
+  if (t.opening_hours === 'closed' || t.opening_hours === 'off') return true;
+  if (t.closed || t['end_date']) return true;
+  return false;
+}
+
 function slim(el, key) {
   const t = el.tags ?? {};
   const lat = el.lat ?? el.center?.lat;
   const lng = el.lon ?? el.center?.lon;
   if (lat == null || lng == null) return null;
+  if (isClosed(t)) return null;
   const addr = [t['addr:housenumber'], t['addr:street']].filter(Boolean).join(' ');
-  return {
+  const v = {
     id: `${el.type[0]}${el.id}`,
     name: t.name,
     lat: +lat.toFixed(6),
@@ -54,6 +64,15 @@ function slim(el, key) {
     cuisine: t.cuisine ?? '',
     addr,
   };
+  // Optional enrichment fields — only set when present to keep JSON small.
+  const web = t.website ?? t['contact:website'];
+  if (web) v.web = web;
+  const tel = t.phone ?? t['contact:phone'];
+  if (tel) v.tel = tel;
+  if (t.opening_hours) v.hours = t.opening_hours;
+  if (t.description) v.desc = t.description;
+  if (t.wikidata) v.wd = t.wikidata;
+  return v;
 }
 
 const byId = new Map();

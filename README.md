@@ -22,9 +22,24 @@ npm test        # engine test suite
 ## Refresh data
 
 ```sh
-npm run fetch:venues   # OSM Overpass → src/data/venues.json
-npm run fetch:subway   # OSM Overpass → src/data/subway.json
+npm run fetch:venues      # OSM Overpass → src/data/venues.json (drops closed-tagged places)
+npm run fetch:subway      # OSM Overpass → src/data/subway.json
+npm run enrich:wikidata   # free photos + descriptions for landmarks/museums (no key)
 ```
+
+## Ratings, prices, photos, closed-status (needs a free-tier Google key)
+
+Star ratings, review counts, `$$` price levels, storefront photos, and definitive
+permanently-closed removal come from Google Places. One-time setup:
+
+1. Create a key at console.cloud.google.com → enable **Places API (New)**
+2. Put `GOOGLE_PLACES_API_KEY=...` in `.env.local`
+3. `npm run enrich:google` — enriches the vegan + tea subset (~850 lookups,
+   inside Google's monthly free tier) and removes closed venues.
+   Add `--all` for every venue (12k+ calls, costs real money), `--desc` for
+   editorial descriptions.
+
+The UI renders stars/price/photos automatically once the data is present.
 
 ## Swapping in commercial APIs
 

@@ -328,6 +328,8 @@ function recompute(venuesOnly: boolean): void {
 const gmaps = (v: Venue) =>
   `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${v.name} ${v.addr || ''} New York`)}`;
 
+const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+
 function venueTags(v: Venue): string {
   const tags: string[] = [];
   if (v.vegan === 2) tags.push('<span class="tag vegan2">100% vegan</span>');
@@ -337,21 +339,60 @@ function venueTags(v: Venue): string {
   return tags.join('');
 }
 
-function popupHtml(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB: number }[]): string {
+function starsHtml(v: Venue): string {
+  if (v.rating == null) return '';
+  const full = Math.round(v.rating);
+  const stars = '★'.repeat(full) + '☆'.repeat(5 - full);
+  const count = v.ratings ? ` (${v.ratings.toLocaleString()})` : '';
+  return `<span class="stars">${stars}</span> <b>${v.rating.toFixed(1)}</b>${count}`;
+}
+
+function metaLine(v: Venue): string {
+  const bits: string[] = [];
+  const stars = starsHtml(v);
+  if (stars) bits.push(stars);
+  if (v.price) bits.push(`<span class="price">${'$'.repeat(v.price)}</span>`);
+  if (v.cuisine) bits.push(esc(v.cuisine.split(';')[0].replace(/_/g, ' ')));
+  return bits.join(' · ');
+}
+
+// ── Detail panel ─────────────────────────────────────────────
+const detailEl = document.getElementById('detail') as HTMLElement;
+
+function closeDetail(): void {
+  detailEl.hidden = true;
+}
+
+function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB: number }[]): void {
   const rows = combos
     .map(
       (c) =>
-        `<div><span class="ca">A·${MODE_LABEL[c.modeA]} ${Math.round(c.tA)}′</span> · ` +
-        `<span class="cb">B·${MODE_LABEL[c.modeB]} ${Math.round(c.tB)}′</span> · ` +
-        `Δ${Math.round(Math.abs(c.tA - c.tB))}′</div>`,
+        `<tr><td><span class="ca">A · ${MODE_LABEL[c.modeA]}</span></td><td>${Math.round(c.tA)}′</td>` +
+        `<td><span class="cb">B · ${MODE_LABEL[c.modeB]}</span></td><td>${Math.round(c.tB)}′</td>` +
+        `<td class="gap">Δ${Math.round(Math.abs(c.tA - c.tB))}′</td></tr>`,
     )
     .join('');
-  return (
-    `<div class="pop-name">${v.name}</div>` +
-    `<div class="pop-addr">${v.addr || v.cuisine || v.cat}</div>` +
-    `<div class="pop-times">${rows}</div>` +
-    `<a class="pop-link" href="${gmaps(v)}" target="_blank" rel="noopener">Open in Google Maps ↗</a>`
-  );
+  const meta = metaLine(v);
+  detailEl.innerHTML =
+    `<button class="detail-close" aria-label="Close">✕</button>` +
+    (v.img ? `<img class="detail-img" src="${esc(v.img)}" alt="" onerror="this.remove()" />` : '') +
+    `<div class="detail-body">` +
+    `<h3>${esc(v.name)}</h3>` +
+    (meta ? `<div class="detail-meta">${meta}</div>` : '') +
+    `<div class="detail-tags">${venueTags(v)}</div>` +
+    (v.desc ? `<p class="detail-desc">${esc(v.desc)}</p>` : '') +
+    `<div class="detail-facts">` +
+    (v.addr ? `<div>📍 ${esc(v.addr)}</div>` : '') +
+    (v.hours ? `<div>🕐 ${esc(v.hours.length > 64 ? v.hours.slice(0, 64) + '…' : v.hours)}</div>` : '') +
+    (v.tel ? `<div>📞 ${esc(v.tel)}</div>` : '') +
+    `</div>` +
+    `<table class="detail-times">${rows}</table>` +
+    `<div class="detail-links">` +
+    (v.web ? `<a href="${esc(v.web)}" target="_blank" rel="noopener">Website ↗</a>` : '') +
+    `<a href="${gmaps(v)}" target="_blank" rel="noopener">Google Maps ↗</a>` +
+    `</div></div>`;
+  detailEl.hidden = false;
+  detailEl.querySelector<HTMLButtonElement>('.detail-close')!.onclick = closeDetail;
 }
 
 function heatColor(t: number): string {
@@ -390,25 +431,28 @@ function renderVenues(): void {
   const maxScore = scored[0].s.score;
   for (const { v, s } of scored) {
     const best = s.combos.reduce((p, c) => (Math.abs(c.tA - c.tB) < Math.abs(p.tA - p.tB) ? c : p));
+    // Fully-vegan places get the MTA-green ring; vegan-friendly a fainter one.
+    const ring = v.vegan === 2 ? '#00e05c' : v.vegan === 1 ? '#7dedaa' : '#fff';
     const dot = L.circleMarker([v.lat, v.lng], {
-      radius: 6,
-      color: '#fff',
-      weight: 1.5,
+      radius: v.vegan === 2 ? 7 : 6,
+      color: ring,
+      weight: v.vegan ? 2.5 : 1.5,
       fillColor: heatColor(s.score / maxScore),
       fillOpacity: 0.95,
       className: 'venue-dot',
-    })
-      .bindPopup(popupHtml(v, s.combos))
-      .addTo(venueLayer);
+    }).addTo(venueLayer);
+    dot.on('click', () => showDetail(v, s.combos));
 
     const li = document.createElement('li');
+    const meta = metaLine(v);
     li.innerHTML =
-      `<span class="v-name">${v.name}</span>` +
+      `<span class="v-name">${esc(v.name)}</span>` +
       `<span class="v-times"><b class="ta">${Math.round(best.tA)}′</b>/<b class="tb">${Math.round(best.tB)}′</b></span>` +
+      (meta ? `<span class="v-meta">${meta}</span>` : '') +
       `<span class="v-tags">${venueTags(v)}</span>`;
     li.onclick = () => {
       map.setView([v.lat, v.lng], Math.max(map.getZoom(), 14));
-      dot.openPopup();
+      showDetail(v, s.combos);
     };
     listEl.appendChild(li);
   }

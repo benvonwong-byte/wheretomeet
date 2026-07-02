@@ -160,8 +160,13 @@ describe('venue filter', () => {
     expect(r.map((v) => v.id)).toEqual(['a']);
   });
 
-  it('vegan OR tea: union', () => {
-    const r = filterVenues(venues, { categories: all, veganOnly: false, veganFriendly: true, tea: true });
+  it('veganFriendly is a disjoint class: excludes fully-vegan places', () => {
+    const r = filterVenues(venues, { categories: all, veganOnly: false, veganFriendly: true, tea: false });
+    expect(r.map((v) => v.id)).toEqual(['b']);
+  });
+
+  it('vegan classes OR tea: union', () => {
+    const r = filterVenues(venues, { categories: all, veganOnly: true, veganFriendly: true, tea: true });
     expect(r.map((v) => v.id).sort()).toEqual(['a', 'b', 'c']);
   });
 });

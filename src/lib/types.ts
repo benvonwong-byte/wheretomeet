@@ -15,6 +15,16 @@ export interface Venue {
   tea: boolean;
   cuisine: string;
   addr: string;
+  // Enrichment (present when known)
+  web?: string;
+  tel?: string;
+  hours?: string;
+  desc?: string;
+  wd?: string;
+  img?: string;
+  rating?: number; // 1-5 stars
+  ratings?: number; // review count
+  price?: 1 | 2 | 3 | 4; // $ to $$$$
 }
 
 export interface SubwayData {

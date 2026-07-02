@@ -10,7 +10,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "fetch:venues": "node scripts/fetch-venues.mjs",
-    "fetch:subway": "node scripts/fetch-subway.mjs"
+    "fetch:subway": "node scripts/fetch-subway.mjs",
+    "enrich:wikidata": "node scripts/enrich-wikidata.mjs",
+    "enrich:google": "node scripts/enrich-google.mjs"
   },
   "dependencies": {
     "leaflet": "^1.9.4"
