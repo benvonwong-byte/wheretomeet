@@ -27,9 +27,19 @@ export interface Venue {
   price?: 1 | 2 | 3 | 4; // $ to $$$$
 }
 
+export type Daypart = 'rush' | 'midday' | 'evening' | 'night';
+
 export interface SubwayData {
   stations: { name: string; lat: number; lng: number }[];
-  routes: { ref: string; stops: number[] }[];
+  routes: {
+    ref: string;
+    /** Directed segments [fromStation, toStation, seconds] with real GTFS run times. */
+    segs: [number, number, number][];
+    /** Scheduled headway in seconds per daypart. */
+    headway: Record<Daypart, number>;
+  }[];
+  /** Station-to-station transfer rules [a, b, seconds] from GTFS transfers.txt. */
+  transfers: [number, number, number][];
 }
 
 export interface GridSpec {

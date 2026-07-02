@@ -40,37 +40,50 @@ describe('modes', () => {
   });
 });
 
-// Tiny synthetic subway: 3 stations on a line, 4th transferable near station 1.
+// Tiny synthetic GTFS-style subway: line A over stations 0-1-2 (real segment
+// times), line B from station 3 (transfer-adjacent to 1) out to station 4.
+const HW = { rush: 300, midday: 600, evening: 720, night: 1200 };
 const line: SubwayData = {
   stations: [
     { name: 'S0', lat: 40.7, lng: -74.0 },
     { name: 'S1', lat: 40.72, lng: -74.0 },
     { name: 'S2', lat: 40.74, lng: -74.0 },
-    { name: 'S1b', lat: 40.7201, lng: -74.0001 }, // ~11m from S1 → transfer
-    { name: 'S3', lat: 40.7401, lng: -73.95 }, // on second line from S1b
+    { name: 'S1b', lat: 40.7201, lng: -74.0001 }, // ~11m from S1
+    { name: 'S3', lat: 40.7401, lng: -73.95 },
   ],
   routes: [
-    { ref: 'A', stops: [0, 1, 2] },
-    { ref: 'B', stops: [3, 4] },
+    { ref: 'A', segs: [[0, 1, 180], [1, 0, 180], [1, 2, 180], [2, 1, 180]], headway: HW },
+    { ref: 'B', segs: [[3, 4, 300], [4, 3, 300]], headway: HW },
   ],
+  transfers: [[1, 3, 150]],
 };
 
 describe('transit graph', () => {
-  const g = buildGraph(line);
+  const g = buildGraph(line, 'midday');
 
-  it('creates line edges and a transfer edge', () => {
-    expect(g.adj[0].some((e) => e.to === 1)).toBe(true);
-    expect(g.adj[1].some((e) => e.to === 2)).toBe(true);
-    expect(g.adj[1].some((e) => e.to === 3)).toBe(true); // transfer S1<->S1b
+  it('street nodes connect to platforms and transfers exist', () => {
+    // station 1 must reach some platform node (id >= station count)
+    expect(g.adj[1].some((e) => e.to >= line.stations.length)).toBe(true);
+    // GTFS transfer rule 1<->3
+    expect(g.adj[1].some((e) => e.to === 3)).toBe(true);
   });
 
-  it('dijkstra reaches transfer-connected line', () => {
+  it('dijkstra reaches transfer-connected line with real times', () => {
     const origin = { lat: 40.7, lng: -74.0 }; // at S0
     const t = stationTimes(g, origin);
-    expect(t[0]).toBeLessThan(10); // walk 0 + wait
+    expect(t[0]).toBeLessThan(3); // walk only — wait charged at boarding
     expect(t[2]).toBeGreaterThan(t[1]); // farther along line
-    expect(isFinite(t[4])).toBe(true); // reached via transfer to line B
+    expect(isFinite(t[4])).toBe(true); // via transfer to line B
     expect(t[4]).toBeGreaterThan(t[3]);
+  });
+
+  it('waits are daypart-aware: night trips slower than rush', () => {
+    const origin = { lat: 40.7, lng: -74.0 };
+    const rush = stationTimes(buildGraph(line, 'rush'), origin);
+    const night = stationTimes(buildGraph(line, 'night'), origin);
+    expect(night[2]).toBeGreaterThan(rush[2]);
+    // exactly the headway/2 difference at a single boarding
+    expect(night[2] - rush[2]).toBeCloseTo((HW.night - HW.rush) / 2 / 60, 1);
   });
 
   it('dijkstra reaches every station of a long connected chain (float32 staleness regression)', () => {
@@ -80,8 +93,12 @@ describe('transit graph', () => {
       lat: 40.6 + i * 0.0013 + (i % 7) * 0.00003,
       lng: -74.0 + (i % 3) * 0.0002,
     }));
-    const chain: SubwayData = { stations, routes: [{ ref: 'X', stops: stations.map((_, i) => i) }] };
-    const cg = buildGraph(chain);
+    const segs: [number, number, number][] = [];
+    for (let i = 0; i + 1 < stations.length; i++) {
+      segs.push([i, i + 1, 97], [i + 1, i, 97]);
+    }
+    const chain: SubwayData = { stations, routes: [{ ref: 'X', segs, headway: HW }], transfers: [] };
+    const cg = buildGraph(chain, 'midday');
     const t = stationTimes(cg, { lat: 40.6, lng: -74.0 });
     for (let i = 0; i < t.length; i++) expect(isFinite(t[i]), `station ${i} unreachable`).toBe(true);
   });
@@ -95,6 +112,18 @@ describe('transit graph', () => {
     // Cell near S2 (4.4km away): train should beat the ~70min walk
     const nearS2 = pointToCell(grid, { lat: 40.74, lng: -74.0 });
     expect(field[nearS2]).toBeLessThan(walkMin(origin, { lat: 40.74, lng: -74.0 }));
+  });
+});
+
+describe('fairness bias', () => {
+  it('bias skews the sweet spot: negative favors shorter A trips', () => {
+    // A travels 10, B travels 25: with bias -15 ("closer to A") this is ideal.
+    expect(fairnessScore(10, 25, -15)).toBeGreaterThan(fairnessScore(10, 25, 0));
+    expect(fairnessScore(10, 25, -15)).toBeGreaterThan(fairnessScore(25, 10, -15));
+  });
+
+  it('zero bias keeps symmetry', () => {
+    expect(fairnessScore(12, 30, 0)).toBeCloseTo(fairnessScore(30, 12, 0), 6);
   });
 });
 

@@ -722,3 +722,45 @@ body {
     max-height: 50vh;
   }
 }
+
+/* ── Bias dial + dayparts ─────────────── */
+.bias {
+  margin-top: 12px;
+}
+
+.bias input[type='range'] {
+  width: 100%;
+  accent-color: var(--amber);
+  cursor: pointer;
+}
+
+.bias-labels {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.bias-labels .bias-a {
+  color: #4fd382;
+}
+
+.bias-labels .bias-b {
+  color: #ff9c67;
+}
+
+#bias-val {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--amber);
+}
+
+.routed {
+  color: var(--amber);
+  margin-right: 3px;
+  font-size: 10px;
+}

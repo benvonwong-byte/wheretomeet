@@ -3,16 +3,28 @@ import './style.css';
 import venuesData from './data/venues.json';
 import subwayData from './data/subway.json';
 import { NYC_GRID } from './lib/geo';
-import { buildGraph } from './lib/transit';
+import { buildGraph, type TransitGraph } from './lib/transit';
 import { timeField, comboLayer, averageLayers, scoreAtPoint } from './lib/fairness';
 import { renderHeat } from './lib/heat';
 import { filterVenues } from './lib/venues';
 import { geocode, makeSuggester, type GeoHit } from './lib/geocode';
-import type { Pt, Mode, Venue, ComboLayer, TimeField } from './lib/types';
+import { routedMinutes } from './lib/osrm';
+import type { Pt, Mode, Venue, ComboLayer, TimeField, SubwayData, Daypart } from './lib/types';
 
 // ── Static data ──────────────────────────────────────────────
 const VENUES = (venuesData as { venues: Venue[] }).venues;
-const GRAPH = buildGraph(subwayData as { stations: { name: string; lat: number; lng: number }[]; routes: { ref: string; stops: number[] }[] });
+const SUBWAY = subwayData as unknown as SubwayData;
+const graphCache = new Map<Daypart, TransitGraph>();
+
+function getGraph(daypart: Daypart): TransitGraph {
+  let g = graphCache.get(daypart);
+  if (!g) {
+    g = buildGraph(SUBWAY, daypart);
+    graphCache.set(daypart, g);
+  }
+  return g;
+}
+
 const GRID = NYC_GRID;
 const CELLS = GRID.rows * GRID.cols;
 
@@ -38,18 +50,25 @@ const state = {
   veganOnly: false,
   veganFriendly: true,
   tea: true,
+  daypart: 'midday' as Daypart,
+  bias: 0, // minutes; negative skews toward A, positive toward B
 };
 
 const fieldCache = new Map<string, TimeField>();
 
 function getField(who: 'A' | 'B', mode: Mode): TimeField {
-  const key = `${who}:${mode}`;
+  // Transit fields depend on the daypart (headway-based waits).
+  const key = mode === 'transit' ? `${who}:transit:${state.daypart}` : `${who}:${mode}`;
   let f = fieldCache.get(key);
   if (!f) {
-    f = timeField(GRAPH, state[who].pt, mode, GRID);
+    f = timeField(getGraph(state.daypart), state[who].pt, mode, GRID);
     fieldCache.set(key, f);
   }
   return f;
+}
+
+function clearPersonFields(who: 'A' | 'B'): void {
+  for (const key of [...fieldCache.keys()]) if (key.startsWith(`${who}:`)) fieldCache.delete(key);
 }
 
 const comboKey = (a: Mode, b: Mode) => `${a}|${b}`;
@@ -93,10 +112,8 @@ function makePersonMarker(who: 'A' | 'B'): L.Marker {
   marker.on('dragend', () => {
     const ll = marker.getLatLng();
     state[who].pt = { lat: ll.lat, lng: ll.lng };
-    fieldCache.delete(`${who}:transit`);
-    fieldCache.delete(`${who}:bike`);
-    fieldCache.delete(`${who}:car`);
-    fieldCache.delete(`${who}:walk`);
+    clearPersonFields(who);
+    exactCache[who].clear();
     (document.getElementById(`addr-${who.toLowerCase()}`) as HTMLInputElement).value = '';
     scheduleRecompute();
   });
@@ -126,6 +143,42 @@ function renderModes(who: 'A' | 'B'): void {
     };
     el.appendChild(btn);
   }
+}
+
+// ── UI: daypart + bias dial ──────────────────────────────────
+const DAYPARTS: { id: Daypart; label: string }[] = [
+  { id: 'rush', label: 'RUSH HOUR' },
+  { id: 'midday', label: 'MIDDAY' },
+  { id: 'evening', label: 'EVENING' },
+  { id: 'night', label: 'LATE NIGHT' },
+];
+
+function renderDayparts(): void {
+  const el = document.getElementById('dayparts')!;
+  el.innerHTML = '';
+  for (const d of DAYPARTS) {
+    const chip = document.createElement('button');
+    chip.className = 'chip' + (state.daypart === d.id ? ' on' : '');
+    chip.textContent = d.label;
+    chip.onclick = () => {
+      if (state.daypart === d.id) return;
+      state.daypart = d.id;
+      renderDayparts();
+      scheduleRecompute();
+    };
+    el.appendChild(chip);
+  }
+}
+
+function wireBias(): void {
+  const slider = document.getElementById('bias') as HTMLInputElement;
+  const val = document.getElementById('bias-val')!;
+  slider.addEventListener('input', () => {
+    state.bias = +slider.value;
+    val.textContent =
+      state.bias === 0 ? 'FAIR' : state.bias < 0 ? `A saves ${-state.bias}′` : `B saves ${state.bias}′`;
+    scheduleRecompute();
+  });
 }
 
 // ── UI: layer legend ─────────────────────────────────────────
@@ -199,7 +252,8 @@ function applyLocation(who: 'A' | 'B', hit: GeoHit, input: HTMLInputElement): vo
   input.value = hit.label;
   input.classList.remove('bad');
   state[who].pt = hit.pt;
-  for (const m of MODES) fieldCache.delete(`${who}:${m.id}`);
+  clearPersonFields(who);
+  exactCache[who].clear();
   markers[who].setLatLng(hit.pt);
   map.panTo(hit.pt);
   scheduleRecompute();
@@ -307,7 +361,7 @@ function recompute(venuesOnly: boolean): void {
   renderLayers();
   if (!venuesOnly || lastLayers.length === 0) {
     const combos = activeCombos().filter((c) => c.on);
-    lastLayers = combos.map((c) => comboLayer(c.a, c.b, getField('A', c.a), getField('B', c.b)));
+    lastLayers = combos.map((c) => comboLayer(c.a, c.b, getField('A', c.a), getField('B', c.b), state.bias));
     const avg = averageLayers(lastLayers, CELLS);
     const canvas = renderHeat(avg, GRID);
     const url = canvas.toDataURL();
@@ -402,6 +456,47 @@ function heatColor(t: number): string {
   return '#8b919c';
 }
 
+// ── Exact street routing (OSRM) ──────────────────────────────
+// Model times paint the heatmap; the ranked list gets refined with real
+// street-network routing per venue. Cache: `${mode}:${venueId}` → minutes.
+const exactCache = { A: new Map<string, number | null>(), B: new Map<string, number | null>() };
+let refineToken = 0;
+
+function effectiveCombos(
+  v: Venue,
+  combos: { modeA: Mode; modeB: Mode; tA: number; tB: number }[],
+): { combos: { modeA: Mode; modeB: Mode; tA: number; tB: number }[]; refined: boolean } {
+  let refined = false;
+  const out = combos.map((c) => {
+    const eA = exactCache.A.get(`${c.modeA}:${v.id}`);
+    const eB = exactCache.B.get(`${c.modeB}:${v.id}`);
+    if (typeof eA === 'number' || typeof eB === 'number') refined = true;
+    return { ...c, tA: typeof eA === 'number' ? eA : c.tA, tB: typeof eB === 'number' ? eB : c.tB };
+  });
+  return { combos: out, refined };
+}
+
+async function refineVenues(venues: Venue[]): Promise<void> {
+  const token = ++refineToken;
+  const jobs: Promise<void>[] = [];
+  for (const who of ['A', 'B'] as const) {
+    for (const mode of state[who].modes) {
+      if (mode === 'transit') continue; // GTFS engine is the authority there
+      const missing = venues.filter((v) => !exactCache[who].has(`${mode}:${v.id}`));
+      if (!missing.length) continue;
+      jobs.push(
+        routedMinutes(state[who].pt, missing, mode).then((mins) => {
+          if (!mins) return;
+          missing.forEach((v, i) => exactCache[who].set(`${mode}:${v.id}`, mins[i]));
+        }),
+      );
+    }
+  }
+  if (!jobs.length) return;
+  await Promise.all(jobs);
+  if (token === refineToken) renderVenues(); // no missing left → no re-refine loop
+}
+
 function renderVenues(): void {
   venueLayer.clearLayers();
   const listEl = document.getElementById('venues')!;
@@ -430,7 +525,8 @@ function renderVenues(): void {
 
   const maxScore = scored[0].s.score;
   for (const { v, s } of scored) {
-    const best = s.combos.reduce((p, c) => (Math.abs(c.tA - c.tB) < Math.abs(p.tA - p.tB) ? c : p));
+    const { combos, refined } = effectiveCombos(v, s.combos);
+    const best = combos.reduce((p, c) => (Math.abs(c.tA - c.tB) < Math.abs(p.tA - p.tB) ? c : p));
     // Fully-vegan places get the MTA-green ring; vegan-friendly a fainter one.
     const ring = v.vegan === 2 ? '#00e05c' : v.vegan === 1 ? '#7dedaa' : '#fff';
     const dot = L.circleMarker([v.lat, v.lng], {
@@ -441,26 +537,30 @@ function renderVenues(): void {
       fillOpacity: 0.95,
       className: 'venue-dot',
     }).addTo(venueLayer);
-    dot.on('click', () => showDetail(v, s.combos));
+    dot.on('click', () => showDetail(v, effectiveCombos(v, s.combos).combos));
 
     const li = document.createElement('li');
     const meta = metaLine(v);
     li.innerHTML =
       `<span class="v-name">${esc(v.name)}</span>` +
-      `<span class="v-times"><b class="ta">${Math.round(best.tA)}′</b>/<b class="tb">${Math.round(best.tB)}′</b></span>` +
+      `<span class="v-times">${refined ? '<span class="routed" title="street-routed times">⚡</span>' : ''}<b class="ta">${Math.round(best.tA)}′</b>/<b class="tb">${Math.round(best.tB)}′</b></span>` +
       (meta ? `<span class="v-meta">${meta}</span>` : '') +
       `<span class="v-tags">${venueTags(v)}</span>`;
     li.onclick = () => {
       map.setView([v.lat, v.lng], Math.max(map.getZoom(), 14));
-      showDetail(v, s.combos);
+      showDetail(v, effectiveCombos(v, s.combos).combos);
     };
     listEl.appendChild(li);
   }
+
+  void refineVenues(scored.map((x) => x.v));
 }
 
 // ── Boot ─────────────────────────────────────────────────────
 renderModes('A');
 renderModes('B');
+renderDayparts();
+wireBias();
 renderCatFilters();
 renderDietFilters();
 wireInput('A');

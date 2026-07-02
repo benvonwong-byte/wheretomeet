@@ -39,6 +39,19 @@
           <div class="modes" id="modes-b"></div>
         </section>
 
+        <section class="panel" id="tuning-panel">
+          <h2>When &amp; balance</h2>
+          <div class="filters" id="dayparts"></div>
+          <div class="bias">
+            <input id="bias" type="range" min="-20" max="20" step="5" value="0" />
+            <div class="bias-labels">
+              <span class="bias-a">← closer to A</span>
+              <span id="bias-val">FAIR</span>
+              <span class="bias-b">closer to B →</span>
+            </div>
+          </div>
+        </section>
+
         <section class="panel" id="layers-panel">
           <h2>Fair-zone layers</h2>
           <div id="layers"></div>

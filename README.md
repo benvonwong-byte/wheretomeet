@@ -4,10 +4,10 @@ Fair meeting zones for two people in New York City. Enter two addresses (or drag
 
 ## How it works
 
-- **Fairness rule**: minimize the travel-time *gap* between the two people, damped by max time (`exp(-(gap/12)²) · exp(-max/50)`).
+- **Fairness rule**: minimize the travel-time *gap* between the two people, damped by max time (`exp(-(gap/12)²) · exp(-max/50)`). The **balance dial** shifts the ideal gap ±20′ toward either person.
 - **Layers**: each Person-A-mode × Person-B-mode pair is its own fair-zone layer (e.g. `A·BIKE × B·SUBWAY`). The heatmap is the average of active layers; toggle layers in the legend or by unchecking modes.
-- **Transit model**: real NYC subway graph (1,127 stop nodes, 119 route relations from OSM) with Dijkstra routing, transfer penalties, wait times, and walk access/egress. Smoke-validated against real trip times (e.g. Times Sq→Astoria ≈ 29 min).
-- **Bike / car / walk**: calibrated speed + detour-factor + overhead models (car includes parking).
+- **Transit**: built from the **official MTA GTFS schedule feed** — 496 stations, real segment run times (median of ~8,500 weekday trips), `transfers.txt` rules, and headway-derived waits that change with the time-of-day selector (rush/midday/evening/night). Boarding waits are charged per boarding, including at transfers, via a street/platform expanded graph. Validated against real trips (Times Sq→Astoria 31′ rush / 34′ night; real 25–30). Buses not yet modeled; walk access/egress uses a Manhattan-grid detour factor.
+- **Bike / car / walk**: heatmap uses calibrated speed + detour-factor models; the **ranked venue list is refined with real street-network routing** (OSRM/Valhalla public servers, table API) when reachable — ⚡ marks routed times. Car includes parking overhead.
 - **Venues**: 12,231 NYC venues baked from OSM Overpass — including 59 fully-vegan, 547 vegan-friendly, and 235 tea spots (`diet:vegan`, `shop=tea`, `cuisine` tags).
 - **Geocoding**: Nominatim, NYC-biased. No API keys anywhere.
 

@@ -1,81 +1,110 @@
 import { haversineKm, cellCenter } from './geo';
 import { walkMin } from './modes';
-import type { Pt, SubwayData, GridSpec, TimeField } from './types';
+import type { Pt, SubwayData, GridSpec, TimeField, Daypart } from './types';
 
-// NYC subway calibration (best guess, demo-grade).
-const TRAIN_SPEED = 32; // km/h average incl. acceleration
-const DWELL_MIN = 0.7; // per stop
-const WAIT_MIN = 4; // half a typical headway
-const TRANSFER_MIN = 4;
-const TRANSFER_RADIUS_KM = 0.18;
-const ACCESS_RADIUS_KM = 1.6; // max walk to enter the system
-const EGRESS_RADIUS_KM = 1.6; // max walk from a station to destination
+// Station access parameters (walking legs remain estimates; ride times and
+// waits come from the real MTA GTFS schedule).
+const ACCESS_RADIUS_KM = 1.6;
+const EGRESS_RADIUS_KM = 1.6;
+const BOARD_OVERHEAD_MIN = 0.75; // fare gates, stairs to platform
+const ALIGHT_MIN = 1.0; // platform to street
+const MAX_WAIT_MIN = 15; // schedule-aware cap: nobody waits out a full 30-min headway blind
+const NEARBY_TRANSFER_KM = 0.16; // walk transfer between stations lacking a transfers.txt rule
+const NEARBY_TRANSFER_MIN = 4;
 
 interface Edge {
   to: number;
   min: number;
 }
 
+/**
+ * Time-expanded graph: nodes 0..S-1 are "street" nodes (one per station);
+ * each (route, station) pair gets a "platform" node. Boarding edges charge
+ * the daypart's headway/2 wait, so waits are per-boarding — including at
+ * transfers — exactly like a real trip.
+ */
 export interface TransitGraph {
   stations: Pt[];
+  /** Total node count (streets + platforms). */
+  n: number;
   adj: Edge[][];
 }
 
-export function buildGraph(data: SubwayData): TransitGraph {
+export function buildGraph(data: SubwayData, daypart: Daypart = 'midday'): TransitGraph {
+  const S = data.stations.length;
   const stations: Pt[] = data.stations.map((s) => ({ lat: s.lat, lng: s.lng }));
-  const adj: Edge[][] = stations.map(() => []);
 
-  const addEdge = (a: number, b: number, min: number) => {
-    adj[a].push({ to: b, min });
-    adj[b].push({ to: a, min });
+  // Assign platform node ids per (route, station).
+  let n = S;
+  const platformId = new Map<string, number>();
+  const platform = (routeIdx: number, station: number) => {
+    const key = `${routeIdx}:${station}`;
+    let id = platformId.get(key);
+    if (id === undefined) {
+      id = n++;
+      platformId.set(key, id);
+    }
+    return id;
   };
-
-  for (const route of data.routes) {
-    for (let i = 0; i + 1 < route.stops.length; i++) {
-      const a = route.stops[i];
-      const b = route.stops[i + 1];
-      const km = haversineKm(stations[a], stations[b]);
-      if (km > 6) continue; // guard against broken relation ordering
-      addEdge(a, b, (km / TRAIN_SPEED) * 60 + DWELL_MIN);
+  for (let r = 0; r < data.routes.length; r++) {
+    for (const [a, b] of data.routes[r].segs) {
+      platform(r, a);
+      platform(r, b);
     }
   }
 
-  // Transfers between nearby stop nodes (covers direction pairs + passageways).
-  for (let i = 0; i < stations.length; i++) {
-    for (let j = i + 1; j < stations.length; j++) {
-      if (Math.abs(stations[i].lat - stations[j].lat) > 0.0025) continue;
-      if (Math.abs(stations[i].lng - stations[j].lng) > 0.0033) continue;
-      if (haversineKm(stations[i], stations[j]) <= TRANSFER_RADIUS_KM) {
-        addEdge(i, j, TRANSFER_MIN);
+  const adj: Edge[][] = Array.from({ length: n }, () => []);
+
+  for (let r = 0; r < data.routes.length; r++) {
+    const route = data.routes[r];
+    const waitMin = Math.min(route.headway[daypart] / 2 / 60, MAX_WAIT_MIN);
+    const touched = new Set<number>();
+    for (const [a, b, sec] of route.segs) {
+      // ride edge (directed, real scheduled run time)
+      adj[platform(r, a)].push({ to: platform(r, b), min: sec / 60 });
+      touched.add(a);
+      touched.add(b);
+    }
+    for (const st of touched) {
+      const p = platform(r, st);
+      adj[st].push({ to: p, min: waitMin + BOARD_OVERHEAD_MIN }); // board
+      adj[p].push({ to: st, min: ALIGHT_MIN }); // alight
+    }
+  }
+
+  // GTFS transfer rules (street to street, both directions).
+  for (const [a, b, sec] of data.transfers) {
+    const min = sec / 60;
+    adj[a].push({ to: b, min });
+    adj[b].push({ to: a, min });
+  }
+
+  // Fallback walk transfers between physically-adjacent stations.
+  const ruled = new Set(data.transfers.map(([a, b]) => (a < b ? `${a}|${b}` : `${b}|${a}`)));
+  for (let i = 0; i < S; i++) {
+    for (let j = i + 1; j < S; j++) {
+      if (Math.abs(stations[i].lat - stations[j].lat) > 0.002) continue;
+      if (Math.abs(stations[i].lng - stations[j].lng) > 0.0027) continue;
+      if (ruled.has(`${i}|${j}`)) continue;
+      if (haversineKm(stations[i], stations[j]) <= NEARBY_TRANSFER_KM) {
+        adj[i].push({ to: j, min: NEARBY_TRANSFER_MIN });
+        adj[j].push({ to: i, min: NEARBY_TRANSFER_MIN });
       }
     }
   }
-  return graphDedup({ stations, adj });
+
+  return { stations, n, adj };
 }
 
-function graphDedup(g: TransitGraph): TransitGraph {
-  // Keep the cheapest parallel edge per (a,b).
-  const adj = g.adj.map((edges) => {
-    const best = new Map<number, number>();
-    for (const e of edges) {
-      const cur = best.get(e.to);
-      if (cur === undefined || e.min < cur) best.set(e.to, e.min);
-    }
-    return [...best.entries()].map(([to, min]) => ({ to, min }));
-  });
-  return { stations: g.stations, adj };
-}
-
-/** Dijkstra from an origin point: minutes to reach every station (walk-in + wait included). */
+/** Dijkstra from an origin point: minutes to each STREET node (walk-in included). */
 export function stationTimes(graph: TransitGraph, origin: Pt): Float32Array {
-  const n = graph.stations.length;
-  const dist = new Float32Array(n).fill(Infinity);
+  const dist = new Float32Array(graph.n).fill(Infinity);
   const heap = new MinHeap();
 
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < graph.stations.length; i++) {
     const km = haversineKm(origin, graph.stations[i]);
     if (km <= ACCESS_RADIUS_KM) {
-      const t = walkMin(origin, graph.stations[i]) + WAIT_MIN;
+      const t = walkMin(origin, graph.stations[i]);
       if (t < dist[i]) {
         dist[i] = t;
         heap.push(i, dist[i]); // push the float32-rounded value to keep staleness check exact
@@ -94,7 +123,7 @@ export function stationTimes(graph: TransitGraph, origin: Pt): Float32Array {
       }
     }
   }
-  return dist;
+  return dist.slice(0, graph.stations.length);
 }
 
 /**
@@ -105,7 +134,6 @@ export function transitField(graph: TransitGraph, origin: Pt, grid: GridSpec): T
   const st = stationTimes(graph, origin);
   const field = new Float32Array(grid.rows * grid.cols).fill(Infinity);
 
-  // Spatial hash of stations for egress lookups.
   const CELL_DEG = 0.02;
   const bins = new Map<string, number[]>();
   const key = (lat: number, lng: number) => `${Math.floor(lat / CELL_DEG)},${Math.floor(lng / CELL_DEG)}`;

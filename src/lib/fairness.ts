@@ -8,9 +8,13 @@ import { transitField, type TransitGraph } from './transit';
 const GAP_SCALE = 12; // minutes
 const MAX_TIME_SCALE = 50; // minutes
 
-export function fairnessScore(tA: number, tB: number): number {
+/**
+ * `bias` shifts the ideal gap in minutes: negative = A travels less
+ * (spot skews toward A), positive = B travels less. 0 = perfectly fair.
+ */
+export function fairnessScore(tA: number, tB: number, bias = 0): number {
   if (!isFinite(tA) || !isFinite(tB)) return 0;
-  const gap = Math.abs(tA - tB);
+  const gap = tA - tB - bias;
   const mx = Math.max(tA, tB);
   return Math.exp(-((gap / GAP_SCALE) ** 2)) * Math.exp(-mx / MAX_TIME_SCALE);
 }
@@ -26,10 +30,10 @@ export function timeField(graph: TransitGraph, origin: Pt, mode: Mode, grid: Gri
   return field;
 }
 
-export function comboLayer(modeA: Mode, modeB: Mode, timesA: TimeField, timesB: TimeField): ComboLayer {
+export function comboLayer(modeA: Mode, modeB: Mode, timesA: TimeField, timesB: TimeField, bias = 0): ComboLayer {
   const scores = new Float32Array(timesA.length);
   for (let i = 0; i < scores.length; i++) {
-    scores[i] = fairnessScore(timesA[i], timesB[i]);
+    scores[i] = fairnessScore(timesA[i], timesB[i], bias);
   }
   return { modeA, modeB, scores, timesA, timesB };
 }
