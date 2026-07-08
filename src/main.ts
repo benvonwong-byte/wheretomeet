@@ -52,6 +52,7 @@ const state = {
   tea: true,
   daypart: 'midday' as Daypart,
   tolerance: 15, // max acceptable minutes of deviation between the two travel times
+  sortBy: 'best' as SortBy,
 };
 
 const fieldCache = new Map<string, TimeField>();
@@ -161,6 +162,55 @@ function renderModes(who: 'A' | 'B'): void {
       scheduleRecompute();
     };
     el.appendChild(btn);
+  }
+}
+
+// ── Venue sort criteria ──────────────────────────────────────
+type SortBy = 'best' | 'total' | 'equal' | 'a' | 'b';
+
+const SORTS: { id: SortBy; label: string }[] = [
+  { id: 'best', label: 'BEST' },
+  { id: 'total', label: 'FASTEST TOTAL' },
+  { id: 'equal', label: 'MOST EQUAL' },
+  { id: 'a', label: 'BEST FOR A' },
+  { id: 'b', label: 'BEST FOR B' },
+];
+
+type Combo = { modeA: Mode; modeB: Mode; tA: number; tB: number };
+
+/** The combo that wins under the current criterion — also the headline shown. */
+function pickCombo(combos: Combo[], sortBy: SortBy): Combo {
+  const metric = (c: Combo): number => {
+    switch (sortBy) {
+      case 'total':
+        return c.tA + c.tB;
+      case 'equal':
+        return Math.abs(c.tA - c.tB);
+      case 'a':
+        return c.tA;
+      case 'b':
+        return c.tB;
+      default:
+        return -fairnessScore(c.tA, c.tB, state.tolerance); // lower = better
+    }
+  };
+  return combos.reduce((p, c) => (metric(c) < metric(p) ? c : p));
+}
+
+function renderSortChips(): void {
+  const el = document.getElementById('sort-chips')!;
+  el.innerHTML = '';
+  for (const s of SORTS) {
+    const chip = document.createElement('button');
+    chip.className = 'chip' + (state.sortBy === s.id ? ' on' : '');
+    chip.textContent = s.label;
+    chip.onclick = () => {
+      if (state.sortBy === s.id) return;
+      state.sortBy = s.id;
+      renderSortChips();
+      scheduleRecompute(true);
+    };
+    el.appendChild(chip);
   }
 }
 
@@ -540,9 +590,23 @@ function renderVenues(): void {
     .map(({ v, s }) => {
       const eff = effectiveCombos(v, s.combos);
       const finalScore = eff.combos.reduce((m, c) => Math.max(m, fairnessScore(c.tA, c.tB, state.tolerance)), 0);
-      return { v, s, eff, finalScore };
+      const best = pickCombo(eff.combos, state.sortBy);
+      return { v, s, eff, finalScore, best };
     })
-    .sort((a, b) => b.finalScore - a.finalScore)
+    .sort((x, y) => {
+      switch (state.sortBy) {
+        case 'total':
+          return x.best.tA + x.best.tB - (y.best.tA + y.best.tB);
+        case 'equal':
+          return Math.abs(x.best.tA - x.best.tB) - Math.abs(y.best.tA - y.best.tB) || x.best.tA + x.best.tB - (y.best.tA + y.best.tB);
+        case 'a':
+          return x.best.tA - y.best.tA || x.best.tB - y.best.tB;
+        case 'b':
+          return x.best.tB - y.best.tB || x.best.tA - y.best.tA;
+        default:
+          return y.finalScore - x.finalScore;
+      }
+    })
     .slice(0, 40);
 
   headEl.textContent = `Best spots · ${scored.length}`;
@@ -552,11 +616,9 @@ function renderVenues(): void {
     return;
   }
 
-  const maxScore = scored[0].finalScore || 1;
-  for (const { v, s, eff, finalScore } of scored) {
-    const { combos, refined } = eff;
-    // Headline = the combo that actually earned the rank (tolerance-aware score, refined times).
-    const best = combos.reduce((p, c) => (fairnessScore(c.tA, c.tB, state.tolerance) > fairnessScore(p.tA, p.tB, state.tolerance) ? c : p));
+  const maxScore = Math.max(...scored.map((x) => x.finalScore)) || 1;
+  for (const { v, s, eff, finalScore, best } of scored) {
+    const { refined } = eff;
     // Fully-vegan places get the MTA-green ring; vegan-friendly a fainter one.
     const ring = v.vegan === 2 ? '#00e05c' : v.vegan === 1 ? '#7dedaa' : '#fff';
     const dot = L.circleMarker([v.lat, v.lng], {
@@ -593,6 +655,7 @@ renderDayparts();
 wireTolerance();
 renderCatFilters();
 renderDietFilters();
+renderSortChips();
 wireInput('A');
 wireInput('B');
 scheduleRecompute();

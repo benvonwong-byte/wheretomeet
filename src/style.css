@@ -766,3 +766,51 @@ body {
   margin-right: 3px;
   font-size: 10px;
 }
+
+/* ── Advantage legend ─────────────────── */
+.adv-legend {
+  margin-bottom: 14px;
+}
+
+.adv-bar {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, rgb(45, 100, 235), rgb(252, 204, 10), rgb(235, 55, 46));
+  border: 1px solid var(--line);
+}
+
+.adv-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 5px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.adv-labels .adv-a {
+  color: #6b9bff;
+}
+
+.adv-labels .adv-mid {
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.adv-labels .adv-b {
+  color: #ff8078;
+}
+
+.layers-head {
+  margin-top: 14px !important;
+}
+
+#sort-chips {
+  margin-bottom: 10px;
+}
+
+#sort-chips .chip {
+  font-size: 9.5px;
+  padding: 4px 9px;
+}

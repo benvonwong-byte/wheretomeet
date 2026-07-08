@@ -4,6 +4,7 @@ import { directTimeMin, walkMin } from './modes';
 import { buildGraph, stationTimes, transitField } from './transit';
 import { fairnessScore, comboLayer, maxLayers, minPersonField, timeField, scoreAtPoint } from './fairness';
 import { filterVenues } from './venues';
+import { advantageColor } from './heat';
 import type { SubwayData, Venue } from './types';
 
 describe('geo', () => {
@@ -195,6 +196,23 @@ describe('fairness', () => {
     expect(s).not.toBeNull();
     expect(s!.combos[0]).toMatchObject({ modeA: 'bike', modeB: 'transit', tA: 15, tB: 18 });
     expect(s!.score).toBeGreaterThan(0);
+  });
+});
+
+describe('advantage color', () => {
+  it('diverges: A turf blue, balanced gold, B turf red — and clamps', () => {
+    expect(advantageColor(-25)).toEqual([45, 100, 235]); // full A blue
+    expect(advantageColor(-60)).toEqual([45, 100, 235]); // clamped
+    expect(advantageColor(0)).toEqual([252, 204, 10]); // gold seam
+    expect(advantageColor(25)).toEqual([235, 55, 46]); // full B red
+    expect(advantageColor(60)).toEqual([235, 55, 46]); // clamped
+  });
+
+  it('interpolates smoothly between poles', () => {
+    const [r, g, b] = advantageColor(-12.5); // halfway A-blue → gold
+    expect(r).toBeCloseTo((45 + 252) / 2, 0);
+    expect(g).toBeCloseTo((100 + 204) / 2, 0);
+    expect(b).toBeCloseTo((235 + 10) / 2, 0);
   });
 });
 
