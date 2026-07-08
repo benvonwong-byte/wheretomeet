@@ -9,6 +9,8 @@ import { renderHeat } from './lib/heat';
 import { filterVenues } from './lib/venues';
 import { geocode, makeSuggester, type GeoHit } from './lib/geocode';
 import { routedMinutes, routedField } from './lib/osrm';
+import { venueEmoji } from './lib/emoji';
+import { loadFavs, toggleFav } from './lib/favs';
 import type { Pt, Mode, Venue, ComboLayer, TimeField, SubwayData, Daypart } from './lib/types';
 
 // ── Static data ──────────────────────────────────────────────
@@ -472,6 +474,14 @@ function starsHtml(v: Venue): string {
   return `<span class="stars">${stars}</span> <b>${v.rating.toFixed(1)}</b>${count}`;
 }
 
+function tipHtml(v: Venue): string {
+  const bits = [`${venueEmoji(v)} <b>${esc(v.name)}</b>`];
+  const stars = starsHtml(v);
+  if (stars) bits.push(stars);
+  if (v.cuisine) bits.push(esc(v.cuisine.split(';')[0].replace(/_/g, ' ')));
+  return bits.join(' · ');
+}
+
 function metaLine(v: Venue): string {
   const bits: string[] = [];
   const stars = starsHtml(v);
@@ -498,11 +508,13 @@ function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB
     )
     .join('');
   const meta = metaLine(v);
+  const isFav = loadFavs(state.A.pt, state.B.pt).has(v.id);
   detailEl.innerHTML =
     `<button class="detail-close" aria-label="Close">✕</button>` +
+    `<button class="fav-btn detail-fav${isFav ? ' on' : ''}" title="favorite for this pair">♥</button>` +
     (v.img ? `<img class="detail-img" src="${esc(v.img)}" alt="" onerror="this.remove()" />` : '') +
     `<div class="detail-body">` +
-    `<h3>${esc(v.name)}</h3>` +
+    `<h3>${venueEmoji(v)} ${esc(v.name)}</h3>` +
     (meta ? `<div class="detail-meta">${meta}</div>` : '') +
     `<div class="detail-tags">${venueTags(v)}</div>` +
     (v.desc ? `<p class="detail-desc">${esc(v.desc)}</p>` : '') +
@@ -518,6 +530,11 @@ function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB
     `</div></div>`;
   detailEl.hidden = false;
   detailEl.querySelector<HTMLButtonElement>('.detail-close')!.onclick = closeDetail;
+  detailEl.querySelector<HTMLButtonElement>('.detail-fav')!.onclick = () => {
+    toggleFav(state.A.pt, state.B.pt, v.id);
+    renderVenues();
+    showDetail(v, combos);
+  };
 }
 
 function heatColor(t: number): string {
@@ -620,28 +637,41 @@ function renderVenues(): void {
     return;
   }
 
+  // Favorites for this A↔B pair float to the top.
+  const favs = loadFavs(state.A.pt, state.B.pt);
+  const ordered = [...scored.filter((x) => favs.has(x.v.id)), ...scored.filter((x) => !favs.has(x.v.id))];
+
   const maxScore = Math.max(...scored.map((x) => x.finalScore)) || 1;
-  for (const { v, s, eff, finalScore, best } of scored) {
+  for (const { v, s, eff, finalScore, best } of ordered) {
     const { refined } = eff;
-    // Fully-vegan places get the MTA-green ring; vegan-friendly a fainter one.
-    const ring = v.vegan === 2 ? '#00e05c' : v.vegan === 1 ? '#7dedaa' : '#fff';
-    const dot = L.circleMarker([v.lat, v.lng], {
-      radius: v.vegan === 2 ? 7 : 6,
-      color: ring,
-      weight: v.vegan ? 2.5 : 1.5,
-      fillColor: heatColor(finalScore / maxScore),
-      fillOpacity: 0.95,
-      className: 'venue-dot',
+    const isFav = favs.has(v.id);
+    // Ring color: fully-vegan MTA green, vegan-friendly fainter; fav = pink.
+    const ring = isFav ? '#ff2d78' : v.vegan === 2 ? '#00e05c' : v.vegan === 1 ? '#7dedaa' : '#fff';
+    const pin = L.marker([v.lat, v.lng], {
+      icon: L.divIcon({
+        className: '',
+        html: `<div class="venue-pin${v.rating != null && v.rating >= 4.5 ? ' top-rated' : ''}" style="background:${heatColor(finalScore / maxScore)};border-color:${ring}">${venueEmoji(v)}${isFav ? '<span class="pin-fav">♥</span>' : ''}</div>`,
+        iconSize: [26, 26],
+        iconAnchor: [13, 13],
+      }),
     }).addTo(venueLayer);
-    dot.on('click', () => showDetail(v, effectiveCombos(v, s.combos).combos));
+    pin.bindTooltip(tipHtml(v), { direction: 'top', offset: [0, -12], className: 'venue-tip' });
+    pin.on('click', () => showDetail(v, effectiveCombos(v, s.combos).combos));
 
     const li = document.createElement('li');
+    if (isFav) li.className = 'faved';
     const meta = metaLine(v);
     li.innerHTML =
-      `<span class="v-name">${esc(v.name)}</span>` +
-      `<span class="v-times">${refined ? '<span class="routed" title="street-routed times">⚡</span>' : ''}<b class="ta">${Math.round(best.tA)}′</b>/<b class="tb">${Math.round(best.tB)}′</b></span>` +
+      `<span class="v-name">${venueEmoji(v)} ${esc(v.name)}</span>` +
+      `<span class="v-side"><button class="fav-btn${isFav ? ' on' : ''}" title="favorite for this pair">♥</button>` +
+      `<span class="v-times">${refined ? '<span class="routed" title="street-routed times">⚡</span>' : ''}<b class="ta">${Math.round(best.tA)}′</b>/<b class="tb">${Math.round(best.tB)}′</b></span></span>` +
       (meta ? `<span class="v-meta">${meta}</span>` : '') +
       `<span class="v-tags">${venueTags(v)}</span>`;
+    li.querySelector<HTMLButtonElement>('.fav-btn')!.onclick = (e) => {
+      e.stopPropagation();
+      toggleFav(state.A.pt, state.B.pt, v.id);
+      renderVenues();
+    };
     li.onclick = () => {
       map.setView([v.lat, v.lng], Math.max(map.getZoom(), 14));
       showDetail(v, effectiveCombos(v, s.combos).combos);

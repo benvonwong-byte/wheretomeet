@@ -521,7 +521,12 @@ body {
     order: 1;
   }
 }
-.heat-img { filter: blur(2px) saturate(1.15); image-rendering: auto; }
+/* multiply: the field tints the streets instead of veiling them */
+.heat-img {
+  filter: blur(2px) saturate(1.3);
+  image-rendering: auto;
+  mix-blend-mode: multiply;
+}
 
 /* ── Autocomplete ─────────────────────── */
 .person-head {
@@ -825,4 +830,101 @@ body {
 .tag.boba {
   background: #2e1f3d;
   color: #cdaaf5;
+}
+
+/* ── Emoji venue pins ─────────────────── */
+.venue-pin {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  position: relative;
+}
+
+.venue-pin.top-rated {
+  box-shadow:
+    0 0 0 2px rgba(252, 204, 10, 0.9),
+    0 0 12px 3px rgba(252, 204, 10, 0.55);
+}
+
+.pin-fav {
+  position: absolute;
+  top: -7px;
+  right: -6px;
+  font-size: 11px;
+  color: #ff2d78;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.venue-tip {
+  background: var(--rail) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  padding: 6px 9px;
+}
+
+.venue-tip::before {
+  display: none;
+}
+
+.venue-tip b {
+  font-family: var(--sans);
+  font-size: 12px;
+}
+
+/* ── Favorites ────────────────────────── */
+.fav-btn {
+  background: none;
+  border: none;
+  color: var(--line);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 4px;
+  transition: color 0.12s, transform 0.12s;
+  vertical-align: baseline;
+}
+
+.fav-btn:hover {
+  color: #ff8bb3;
+  transform: scale(1.15);
+}
+
+.fav-btn.on {
+  color: #ff2d78;
+}
+
+#venues .v-side {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+#venues li.faved {
+  background: rgba(255, 45, 120, 0.05);
+  border-left: 2px solid #ff2d78;
+  padding-left: 6px;
+  margin-left: -8px;
+}
+
+.detail-fav {
+  position: absolute;
+  top: 8px;
+  right: 42px;
+  z-index: 2;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(13, 15, 18, 0.75);
+  font-size: 13px;
 }

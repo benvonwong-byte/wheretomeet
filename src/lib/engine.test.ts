@@ -5,6 +5,8 @@ import { buildGraph, stationTimes, transitField } from './transit';
 import { fairnessScore, comboLayer, maxLayers, minPersonField, timeField, scoreAtPoint } from './fairness';
 import { filterVenues } from './venues';
 import { advantageColor } from './heat';
+import { venueEmoji } from './emoji';
+import { pairKey } from './favs';
 import type { SubwayData, Venue } from './types';
 
 describe('geo', () => {
@@ -213,6 +215,30 @@ describe('advantage color', () => {
     expect(r).toBeCloseTo((45 + 252) / 2, 0);
     expect(g).toBeCloseTo((100 + 204) / 2, 0);
     expect(b).toBeCloseTo((235 + 10) / 2, 0);
+  });
+});
+
+describe('venue emoji + favorites', () => {
+  const base = { id: 'x', name: 'X', lat: 0, lng: 0, addr: '', cuisine: '' };
+
+  it('tea classes and vegan outrank cuisine', () => {
+    expect(venueEmoji({ ...base, cat: 'cafe', vegan: 0, tea: 1 } as Venue)).toBe('🍵');
+    expect(venueEmoji({ ...base, cat: 'cafe', vegan: 0, tea: 2 } as Venue)).toBe('🧋');
+    expect(venueEmoji({ ...base, cat: 'restaurant', vegan: 2, tea: 0, cuisine: 'pizza' } as Venue)).toBe('🌱');
+  });
+
+  it('maps cuisine tokens and activity names', () => {
+    expect(venueEmoji({ ...base, cat: 'restaurant', vegan: 0, tea: 0, cuisine: 'pizza' } as Venue)).toBe('🍕');
+    expect(venueEmoji({ ...base, cat: 'restaurant', vegan: 0, tea: 0, cuisine: 'mexican' } as Venue)).toBe('🌮');
+    expect(venueEmoji({ ...base, name: 'Rubin Museum of Art', cat: 'activity', vegan: 0, tea: 0 } as Venue)).toBe('🏛️');
+    expect(venueEmoji({ ...base, cat: 'restaurant', vegan: 0, tea: 0 } as Venue)).toBe('🍽️');
+  });
+
+  it('pairKey is symmetric and snap-tolerant', () => {
+    const a = { lat: 40.71431, lng: -73.96142 };
+    const b = { lat: 40.787, lng: -73.9754 };
+    expect(pairKey(a, b)).toBe(pairKey(b, a));
+    expect(pairKey({ lat: 40.71449, lng: -73.96139 }, b)).toBe(pairKey(a, b)); // ~20m nudge
   });
 });
 
