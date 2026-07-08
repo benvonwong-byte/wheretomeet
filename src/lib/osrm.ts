@@ -17,11 +17,12 @@ const VALHALLA_COSTING: Partial<Record<Mode, string>> = {
 };
 
 // Local self-hosted OSRM (scripts/routing-servers.sh), proxied by Vite.
-const LOCAL_PATH: Partial<Record<Mode, string>> = {
-  bike: '/osrm/bike',
-  car: '/osrm/car',
-  walk: '/osrm/foot',
-};
+// Dev-only: on a deployed site there is no proxy, so skip straight to the
+// public tiers instead of 404ing.
+const IS_LOCAL = typeof location !== 'undefined' && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+const LOCAL_PATH: Partial<Record<Mode, string>> = IS_LOCAL
+  ? { bike: '/osrm/bike', car: '/osrm/car', walk: '/osrm/foot' }
+  : {};
 
 function parseOsrm(json: { code: string; durations?: (number | null)[][] }): (number | null)[] | null {
   if (json.code !== 'Ok' || !json.durations?.[0]) return null;

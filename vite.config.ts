@@ -9,6 +9,8 @@ const osrm = (port: number) => ({
 });
 
 export default defineConfig({
+  // GitHub Pages serves under /<repo>/ — set by the deploy workflow.
+  base: process.env.PAGES_BASE ?? '/',
   server: {
     host: true, // bind all interfaces so 127.0.0.1 (Chrome) works, not just ::1
     proxy: {
