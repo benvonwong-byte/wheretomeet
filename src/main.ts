@@ -8,7 +8,7 @@ import { timeField, comboLayer, maxLayers, minPersonField, scoreAtPoint, fairnes
 import { renderHeat } from './lib/heat';
 import { filterVenues } from './lib/venues';
 import { geocode, makeSuggester, type GeoHit } from './lib/geocode';
-import { routedMinutes } from './lib/osrm';
+import { routedMinutes, routedField } from './lib/osrm';
 import type { Pt, Mode, Venue, ComboLayer, TimeField, SubwayData, Daypart } from './lib/types';
 
 // ── Static data ──────────────────────────────────────────────
@@ -51,10 +51,12 @@ const state = {
   veganFriendly: true,
   tea: true,
   daypart: 'midday' as Daypart,
-  bias: 0, // minutes; negative skews toward A, positive toward B
+  tolerance: 15, // max acceptable minutes of deviation between the two travel times
 };
 
 const fieldCache = new Map<string, TimeField>();
+// Street modes upgrade from model estimates to real OSRM-routed fields, async.
+const fieldUpgrades = new Map<string, 'pending' | 'done'>();
 
 function getField(who: 'A' | 'B', mode: Mode): TimeField {
   // Transit fields depend on the daypart (headway-based waits).
@@ -64,11 +66,28 @@ function getField(who: 'A' | 'B', mode: Mode): TimeField {
     f = timeField(getGraph(state.daypart), state[who].pt, mode, GRID);
     fieldCache.set(key, f);
   }
+  if (mode !== 'transit' && !fieldUpgrades.has(key)) upgradeField(who, mode, key);
   return f;
+}
+
+function upgradeField(who: 'A' | 'B', mode: Mode, key: string): void {
+  fieldUpgrades.set(key, 'pending');
+  const pt = state[who].pt;
+  void routedField(pt, mode, GRID).then((f) => {
+    if (state[who].pt !== pt) return; // pin moved while routing — stale
+    if (!f) {
+      fieldUpgrades.delete(key); // local server unreachable; retry on next recompute
+      return;
+    }
+    fieldCache.set(key, f);
+    fieldUpgrades.set(key, 'done');
+    scheduleRecompute();
+  });
 }
 
 function clearPersonFields(who: 'A' | 'B'): void {
   for (const key of [...fieldCache.keys()]) if (key.startsWith(`${who}:`)) fieldCache.delete(key);
+  for (const key of [...fieldUpgrades.keys()]) if (key.startsWith(`${who}:`)) fieldUpgrades.delete(key);
 }
 
 const comboKey = (a: Mode, b: Mode) => `${a}|${b}`;
@@ -170,13 +189,12 @@ function renderDayparts(): void {
   }
 }
 
-function wireBias(): void {
+function wireTolerance(): void {
   const slider = document.getElementById('bias') as HTMLInputElement;
   const val = document.getElementById('bias-val')!;
   slider.addEventListener('input', () => {
-    state.bias = +slider.value;
-    val.textContent =
-      state.bias === 0 ? 'FAIR' : state.bias < 0 ? `A saves ${-state.bias}′` : `B saves ${state.bias}′`;
+    state.tolerance = +slider.value;
+    val.textContent = state.tolerance === 0 ? 'EQUAL TIMES' : `±${state.tolerance}′`;
     scheduleRecompute();
   });
 }
@@ -361,7 +379,7 @@ function recompute(venuesOnly: boolean): void {
   renderLayers();
   if (!venuesOnly || lastLayers.length === 0) {
     const combos = activeCombos().filter((c) => c.on);
-    lastLayers = combos.map((c) => comboLayer(c.a, c.b, getField('A', c.a), getField('B', c.b), state.bias));
+    lastLayers = combos.map((c) => comboLayer(c.a, c.b, getField('A', c.a), getField('B', c.b), state.tolerance));
     const agg = maxLayers(lastLayers, CELLS);
     const canvas = renderHeat(agg, minPersonField(lastLayers, 'A', CELLS), minPersonField(lastLayers, 'B', CELLS), GRID);
     const url = canvas.toDataURL();
@@ -510,10 +528,21 @@ function renderVenues(): void {
     tea: state.tea,
   });
 
-  const scored = filtered
+  // Shortlist by model score with margin, then rank by the SAME times the rows
+  // display (street-routed where available) so rank and readout never disagree.
+  const candidates = filtered
     .map((v) => ({ v, s: scoreAtPoint(GRID, lastLayers, v) }))
     .filter((x): x is { v: Venue; s: NonNullable<ReturnType<typeof scoreAtPoint>> } => x.s !== null && x.s.score > 0.001)
     .sort((a, b) => b.s.score - a.s.score)
+    .slice(0, 60);
+
+  const scored = candidates
+    .map(({ v, s }) => {
+      const eff = effectiveCombos(v, s.combos);
+      const finalScore = eff.combos.reduce((m, c) => Math.max(m, fairnessScore(c.tA, c.tB, state.tolerance)), 0);
+      return { v, s, eff, finalScore };
+    })
+    .sort((a, b) => b.finalScore - a.finalScore)
     .slice(0, 40);
 
   headEl.textContent = `Best spots · ${scored.length}`;
@@ -523,18 +552,18 @@ function renderVenues(): void {
     return;
   }
 
-  const maxScore = scored[0].s.score;
-  for (const { v, s } of scored) {
-    const { combos, refined } = effectiveCombos(v, s.combos);
-    // Headline = the combo that actually earned the rank (bias-aware score, refined times).
-    const best = combos.reduce((p, c) => (fairnessScore(c.tA, c.tB, state.bias) > fairnessScore(p.tA, p.tB, state.bias) ? c : p));
+  const maxScore = scored[0].finalScore || 1;
+  for (const { v, s, eff, finalScore } of scored) {
+    const { combos, refined } = eff;
+    // Headline = the combo that actually earned the rank (tolerance-aware score, refined times).
+    const best = combos.reduce((p, c) => (fairnessScore(c.tA, c.tB, state.tolerance) > fairnessScore(p.tA, p.tB, state.tolerance) ? c : p));
     // Fully-vegan places get the MTA-green ring; vegan-friendly a fainter one.
     const ring = v.vegan === 2 ? '#00e05c' : v.vegan === 1 ? '#7dedaa' : '#fff';
     const dot = L.circleMarker([v.lat, v.lng], {
       radius: v.vegan === 2 ? 7 : 6,
       color: ring,
       weight: v.vegan ? 2.5 : 1.5,
-      fillColor: heatColor(s.score / maxScore),
+      fillColor: heatColor(finalScore / maxScore),
       fillOpacity: 0.95,
       className: 'venue-dot',
     }).addTo(venueLayer);
@@ -554,14 +583,14 @@ function renderVenues(): void {
     listEl.appendChild(li);
   }
 
-  void refineVenues(scored.map((x) => x.v));
+  void refineVenues(candidates.map((x) => x.v));
 }
 
 // ── Boot ─────────────────────────────────────────────────────
 renderModes('A');
 renderModes('B');
 renderDayparts();
-wireBias();
+wireTolerance();
 renderCatFilters();
 renderDietFilters();
 wireInput('A');

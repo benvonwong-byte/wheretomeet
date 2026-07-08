@@ -115,15 +115,22 @@ describe('transit graph', () => {
   });
 });
 
-describe('fairness bias', () => {
-  it('bias skews the sweet spot: negative favors shorter A trips', () => {
-    // A travels 10, B travels 25: with bias -15 ("closer to A") this is ideal.
-    expect(fairnessScore(10, 25, -15)).toBeGreaterThan(fairnessScore(10, 25, 0));
-    expect(fairnessScore(10, 25, -15)).toBeGreaterThan(fairnessScore(25, 10, -15));
+describe('deviation tolerance dial', () => {
+  it('strict tolerance kills uneven spots that loose tolerance allows for free', () => {
+    // 10/25: 15-min gap. Heavily damped under ±0, costs NOTHING under ±30.
+    expect(fairnessScore(10, 25, 0)).toBeLessThan(0.02);
+    expect(fairnessScore(10, 25, 30)).toBeCloseTo(fairnessScore(17.5, 17.5, 30), 6);
   });
 
-  it('zero bias keeps symmetry', () => {
-    expect(fairnessScore(12, 30, 0)).toBeCloseTo(fairnessScore(30, 12, 0), 6);
+  it('loose tolerance lets a fast-uneven spot beat a slow-even one; strict flips it', () => {
+    const fastUneven: [number, number] = [8, 28]; // total 36, gap 20
+    const slowEven: [number, number] = [24, 25]; // total 49, gap 1
+    expect(fairnessScore(...fastUneven, 30)).toBeGreaterThan(fairnessScore(...slowEven, 30));
+    expect(fairnessScore(...fastUneven, 5)).toBeLessThan(fairnessScore(...slowEven, 5));
+  });
+
+  it('symmetry between the two people', () => {
+    expect(fairnessScore(12, 30, 15)).toBeCloseTo(fairnessScore(30, 12, 15), 6);
   });
 });
 

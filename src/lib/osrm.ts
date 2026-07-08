@@ -1,5 +1,6 @@
-import type { Pt, Mode } from './types';
+import type { Pt, Mode, GridSpec, TimeField } from './types';
 import { MODE_PARAMS } from './modes';
+import { cellCenter } from './geo';
 
 // Exact street-network travel times from the public OSRM instances
 // (routing.openstreetmap.de) — real pathing, not straight-line estimates.
@@ -66,6 +67,67 @@ async function valhallaTable(origin: Pt, dests: Pt[], mode: Mode, signal?: Abort
   const row = json.sources_to_targets?.[0];
   if (!row) return null;
   return row.map((c) => (c?.time == null ? null : c.time / 60));
+}
+
+/**
+ * Street-routed travel-time FIELD for the heatmap: samples the grid coarsely
+ * (every `step`th cell) through the LOCAL OSRM only — ~2k points in ~11 table
+ * calls — then bilinearly upsamples to the full grid. Null if the local
+ * server is unreachable or any chunk fails; caller keeps the model field.
+ */
+export async function routedField(origin: Pt, mode: Mode, grid: GridSpec, step = 3): Promise<TimeField | null> {
+  if (!(mode in LOCAL_PATH)) return null;
+  const overhead = mode in MODE_PARAMS ? MODE_PARAMS[mode as keyof typeof MODE_PARAMS].overhead : 0;
+
+  const cRows = Math.ceil(grid.rows / step);
+  const cCols = Math.ceil(grid.cols / step);
+  const pts: Pt[] = [];
+  for (let r = 0; r < cRows; r++) {
+    for (let c = 0; c < cCols; c++) {
+      pts.push(cellCenter(grid, Math.min(r * step, grid.rows - 1), Math.min(c * step, grid.cols - 1)));
+    }
+  }
+
+  const CHUNK = 180; // local osrm-routed runs with --max-table-size 200
+  const coarse = new Float32Array(pts.length);
+  const jobs: Promise<boolean>[] = [];
+  for (let off = 0; off < pts.length; off += CHUNK) {
+    const slice = pts.slice(off, off + CHUNK);
+    jobs.push(
+      localTable(origin, slice, mode).then((mins) => {
+        if (!mins) return false;
+        mins.forEach((m, i) => {
+          coarse[off + i] = m == null ? Infinity : m + overhead;
+        });
+        return true;
+      }).catch(() => false),
+    );
+  }
+  const ok = (await Promise.all(jobs)).every(Boolean);
+  if (!ok) return null;
+
+  // Bilinear upsample coarse → full grid.
+  const field = new Float32Array(grid.rows * grid.cols);
+  for (let r = 0; r < grid.rows; r++) {
+    const fr = Math.min(r / step, cRows - 1);
+    const r0 = Math.floor(fr);
+    const r1 = Math.min(r0 + 1, cRows - 1);
+    const wr = fr - r0;
+    for (let c = 0; c < grid.cols; c++) {
+      const fc = Math.min(c / step, cCols - 1);
+      const c0 = Math.floor(fc);
+      const c1 = Math.min(c0 + 1, cCols - 1);
+      const wc = fc - c0;
+      const v00 = coarse[r0 * cCols + c0];
+      const v01 = coarse[r0 * cCols + c1];
+      const v10 = coarse[r1 * cCols + c0];
+      const v11 = coarse[r1 * cCols + c1];
+      // Infinity in any corner poisons the blend — take the finite min instead.
+      const blend = v00 * (1 - wr) * (1 - wc) + v01 * (1 - wr) * wc + v10 * wr * (1 - wc) + v11 * wr * wc;
+      field[r * grid.cols + c] = isFinite(blend) ? blend : Math.min(v00, v01, v10, v11);
+    }
+  }
+  return field;
 }
 
 /**

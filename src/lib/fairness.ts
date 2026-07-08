@@ -8,17 +8,19 @@ import { transitField, type TransitGraph } from './transit';
 // cell is "minimum combined travel among fair-ish spots" and the score
 // radiates outward as combined time grows.
 const TOTAL_TIME_SCALE = 45; // combined minutes per e-fold of decay
-const GAP_SCALE = 18; // minutes; loose damping, not the primary objective
+const EXCESS_SOFTNESS = 8; // minutes; how quickly score dies past the allowed deviation
 
 /**
- * `bias` shifts the ideal gap in minutes: negative = A travels less
- * (spot skews toward A), positive = B travels less. 0 = perfectly fair.
+ * `tolerance` = allowed deviation between the two travel times, in minutes
+ * (the dial: 0 = times must match, 30 = up to half an hour apart is fine).
+ * A budget, not a scale: gaps within tolerance cost NOTHING; only the excess
+ * beyond it is penalized, dying off over ~EXCESS_SOFTNESS minutes.
  */
-export function fairnessScore(tA: number, tB: number, bias = 0): number {
+export function fairnessScore(tA: number, tB: number, tolerance = 15): number {
   if (!isFinite(tA) || !isFinite(tB)) return 0;
-  const gap = tA - tB - bias;
+  const excess = Math.max(0, Math.abs(tA - tB) - tolerance);
   const total = tA + tB;
-  return Math.exp(-total / TOTAL_TIME_SCALE) * Math.exp(-((gap / GAP_SCALE) ** 2));
+  return Math.exp(-total / TOTAL_TIME_SCALE) * Math.exp(-((excess / EXCESS_SOFTNESS) ** 2));
 }
 
 export function timeField(graph: TransitGraph, origin: Pt, mode: Mode, grid: GridSpec): TimeField {
@@ -32,10 +34,10 @@ export function timeField(graph: TransitGraph, origin: Pt, mode: Mode, grid: Gri
   return field;
 }
 
-export function comboLayer(modeA: Mode, modeB: Mode, timesA: TimeField, timesB: TimeField, bias = 0): ComboLayer {
+export function comboLayer(modeA: Mode, modeB: Mode, timesA: TimeField, timesB: TimeField, tolerance = 15): ComboLayer {
   const scores = new Float32Array(timesA.length);
   for (let i = 0; i < scores.length; i++) {
-    scores[i] = fairnessScore(timesA[i], timesB[i], bias);
+    scores[i] = fairnessScore(timesA[i], timesB[i], tolerance);
   }
   return { modeA, modeB, scores, timesA, timesB };
 }
