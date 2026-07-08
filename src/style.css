@@ -814,3 +814,15 @@ body {
   font-size: 9.5px;
   padding: 4px 9px;
 }
+
+/* bubble tea = taro purple, distinct from tea-house gold */
+.chip.hero.on.boba {
+  background: #2e1f3d;
+  border-color: #a678de;
+  color: #cdaaf5;
+}
+
+.tag.boba {
+  background: #2e1f3d;
+  color: #cdaaf5;
+}

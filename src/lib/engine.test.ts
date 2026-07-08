@@ -218,31 +218,38 @@ describe('advantage color', () => {
 
 describe('venue filter', () => {
   const venues: Venue[] = [
-    { id: 'a', name: 'Vegan Only Place', lat: 0, lng: 0, cat: 'restaurant', vegan: 2, tea: false, cuisine: '', addr: '' },
-    { id: 'b', name: 'Veg Friendly Cafe', lat: 0, lng: 0, cat: 'cafe', vegan: 1, tea: false, cuisine: '', addr: '' },
-    { id: 'c', name: 'Tea House', lat: 0, lng: 0, cat: 'cafe', vegan: 0, tea: true, cuisine: 'tea', addr: '' },
-    { id: 'd', name: 'Steakhouse', lat: 0, lng: 0, cat: 'restaurant', vegan: 0, tea: false, cuisine: 'steak', addr: '' },
-    { id: 'e', name: 'Museum', lat: 0, lng: 0, cat: 'activity', vegan: 0, tea: false, cuisine: '', addr: '' },
+    { id: 'a', name: 'Vegan Only Place', lat: 0, lng: 0, cat: 'restaurant', vegan: 2, tea: 0, cuisine: '', addr: '' },
+    { id: 'b', name: 'Veg Friendly Cafe', lat: 0, lng: 0, cat: 'cafe', vegan: 1, tea: 0, cuisine: '', addr: '' },
+    { id: 'c', name: 'Tea House', lat: 0, lng: 0, cat: 'cafe', vegan: 0, tea: 1, cuisine: 'tea', addr: '' },
+    { id: 'd', name: 'Steakhouse', lat: 0, lng: 0, cat: 'restaurant', vegan: 0, tea: 0, cuisine: 'steak', addr: '' },
+    { id: 'e', name: 'Museum', lat: 0, lng: 0, cat: 'activity', vegan: 0, tea: 0, cuisine: '', addr: '' },
+    { id: 'f', name: 'Boba Chain', lat: 0, lng: 0, cat: 'cafe', vegan: 0, tea: 2, cuisine: 'bubble_tea', addr: '' },
   ];
   const all = new Set(['restaurant', 'cafe', 'activity'] as const);
+  const off = { veganOnly: false, veganFriendly: false, teaHouse: false, bubbleTea: false };
 
   it('no flags: category filter only', () => {
-    expect(filterVenues(venues, { categories: all, veganOnly: false, veganFriendly: false, tea: false })).toHaveLength(5);
-    expect(filterVenues(venues, { categories: new Set(['cafe']), veganOnly: false, veganFriendly: false, tea: false })).toHaveLength(2);
+    expect(filterVenues(venues, { categories: all, ...off })).toHaveLength(6);
+    expect(filterVenues(venues, { categories: new Set(['cafe']), ...off })).toHaveLength(3);
   });
 
   it('veganOnly: only level-2', () => {
-    const r = filterVenues(venues, { categories: all, veganOnly: true, veganFriendly: false, tea: false });
+    const r = filterVenues(venues, { categories: all, ...off, veganOnly: true });
     expect(r.map((v) => v.id)).toEqual(['a']);
   });
 
   it('veganFriendly is a disjoint class: excludes fully-vegan places', () => {
-    const r = filterVenues(venues, { categories: all, veganOnly: false, veganFriendly: true, tea: false });
+    const r = filterVenues(venues, { categories: all, ...off, veganFriendly: true });
     expect(r.map((v) => v.id)).toEqual(['b']);
   });
 
-  it('vegan classes OR tea: union', () => {
-    const r = filterVenues(venues, { categories: all, veganOnly: true, veganFriendly: true, tea: true });
-    expect(r.map((v) => v.id).sort()).toEqual(['a', 'b', 'c']);
+  it('tea house and bubble tea are disjoint classes', () => {
+    expect(filterVenues(venues, { categories: all, ...off, teaHouse: true }).map((v) => v.id)).toEqual(['c']);
+    expect(filterVenues(venues, { categories: all, ...off, bubbleTea: true }).map((v) => v.id)).toEqual(['f']);
+  });
+
+  it('vegan classes OR tea classes: union', () => {
+    const r = filterVenues(venues, { categories: all, veganOnly: true, veganFriendly: true, teaHouse: true, bubbleTea: true });
+    expect(r.map((v) => v.id).sort()).toEqual(['a', 'b', 'c', 'f']);
   });
 });

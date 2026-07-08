@@ -23,10 +23,21 @@ function veganLevel(tags) {
   return 0;
 }
 
-function isTea(tags) {
-  if (tags.shop === 'tea') return true;
+// 0 = not tea, 1 = proper tea house, 2 = bubble tea. Not the same thing.
+// Known bubble chains often carry a bare cuisine=tea tag in OSM — force them.
+const BOBA_CHAINS =
+  /\b(hey\s*tea|heytea|teazzi|gong\s*cha|kung\s*fu\s*tea|yi\s*fang|yifang|machi\s*machi|xing\s*fu\s*tang|tiger\s*sugar|sharetea|chatime|mixue|happy\s*lemon|moge\s*tee|truedan|vivi|tbaar|debutea|joyba|coco\s+(fresh|tea))\b/i;
+
+function teaKind(tags, name) {
   const cuisine = tags.cuisine ?? '';
-  return /(^|;)\s*(tea|bubble_tea)\s*(;|$)/.test(cuisine);
+  const n = name ?? '';
+  if (/(^|;)\s*bubble_tea\s*(;|$)/.test(cuisine) || /bubble\s*tea|boba/i.test(n) || BOBA_CHAINS.test(n)) return 2;
+  if (tags.shop === 'tea' || /(^|;)\s*tea\s*(;|$)/.test(cuisine) || /tea\s*house|teahouse/i.test(n)) return 1;
+  return 0;
+}
+
+function isTea(tags) {
+  return teaKind(tags, tags.name) > 0;
 }
 
 function baseCategory(key, tags) {
@@ -60,7 +71,7 @@ function slim(el, key) {
     lng: +lng.toFixed(6),
     cat: baseCategory(key, t),
     vegan: veganLevel(t),
-    tea: isTea(t),
+    tea: teaKind(t, t.name),
     cuisine: t.cuisine ?? '',
     addr,
   };
@@ -87,7 +98,7 @@ for (const [key, q] of Object.entries(QUERIES)) {
     if (prev) {
       // Merge: keep strongest flags, prefer 'activity' category from the activity query.
       prev.vegan = Math.max(prev.vegan, v.vegan);
-      prev.tea = prev.tea || v.tea;
+      prev.tea = Math.max(prev.tea, v.tea);
       if (key === 'activity') prev.cat = 'activity';
     } else {
       byId.set(v.id, v);

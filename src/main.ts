@@ -49,7 +49,8 @@ const state = {
   cats: new Set<Venue['cat']>(['restaurant', 'cafe', 'activity']),
   veganOnly: false,
   veganFriendly: true,
-  tea: true,
+  teaHouse: true,
+  bubbleTea: false,
   daypart: 'midday' as Daypart,
   tolerance: 15, // max acceptable minutes of deviation between the two travel times
   sortBy: 'best' as SortBy,
@@ -300,7 +301,8 @@ function renderDietFilters(): void {
   const defs = [
     { key: 'veganFriendly' as const, label: '🌱 VEGAN-FRIENDLY', cls: 'vegan' },
     { key: 'veganOnly' as const, label: '🌱 FULLY VEGAN', cls: 'vegan' },
-    { key: 'tea' as const, label: '🍵 TEA', cls: 'tea' },
+    { key: 'teaHouse' as const, label: '🍵 TEA HOUSE', cls: 'tea' },
+    { key: 'bubbleTea' as const, label: '🧋 BUBBLE TEA', cls: 'boba' },
   ];
   for (const d of defs) {
     const chip = document.createElement('button');
@@ -456,7 +458,8 @@ function venueTags(v: Venue): string {
   const tags: string[] = [];
   if (v.vegan === 2) tags.push('<span class="tag vegan2">100% vegan</span>');
   else if (v.vegan === 1) tags.push('<span class="tag vegan1">vegan-friendly</span>');
-  if (v.tea) tags.push('<span class="tag tea">tea</span>');
+  if (v.tea === 1) tags.push('<span class="tag tea">tea house</span>');
+  else if (v.tea === 2) tags.push('<span class="tag boba">bubble tea</span>');
   tags.push(`<span class="tag">${v.cat}</span>`);
   return tags.join('');
 }
@@ -575,7 +578,8 @@ function renderVenues(): void {
     categories: state.cats,
     veganOnly: state.veganOnly,
     veganFriendly: state.veganFriendly,
-    tea: state.tea,
+    teaHouse: state.teaHouse,
+    bubbleTea: state.bubbleTea,
   });
 
   // Shortlist by model score with margin, then rank by the SAME times the rows

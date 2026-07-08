@@ -12,7 +12,7 @@ export interface Venue {
   lng: number;
   cat: 'restaurant' | 'cafe' | 'activity';
   vegan: 0 | 1 | 2; // 0 none, 1 vegan-friendly, 2 fully vegan
-  tea: boolean;
+  tea: 0 | 1 | 2; // 0 none, 1 proper tea house, 2 bubble tea
   cuisine: string;
   addr: string;
   // Enrichment (present when known)
