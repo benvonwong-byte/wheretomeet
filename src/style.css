@@ -6,11 +6,12 @@
   --paper: #f4f1ea;
   --text: #e8e5dd;
   --dim: #8b919c;
-  --a: #00933c; /* MTA 4/5/6 green */
-  --b: #ff6319; /* MTA B/D/F/M orange */
+  --a: #0039a6; /* MTA A/C/E blue */
+  --b: #ee352e; /* MTA 1/2/3 red */
   --hot: #ff2d78;
   --amber: #ffb500;
   --teal: #00b3a4;
+  --vegan: #00933c; /* MTA 4/5/6 green */
   --mono: 'IBM Plex Mono', ui-monospace, monospace;
   --sans: 'Archivo', sans-serif;
 }
@@ -203,7 +204,8 @@ body {
   height: 14px;
   border-radius: 3px;
   border: 1px solid var(--line);
-  background: linear-gradient(90deg, transparent, var(--amber), var(--hot));
+  /* A-blue → gold core → B-red, matching the map washes */
+  background: linear-gradient(90deg, rgba(45, 100, 235, 0.75), #fccc0a, rgba(235, 55, 46, 0.75));
   flex: none;
   transition: opacity 0.12s;
 }
@@ -271,7 +273,7 @@ body {
 
 .chip.hero.on.vegan {
   background: #0d3d22;
-  border-color: var(--a);
+  border-color: var(--vegan);
   color: #7dedaa;
 }
 
@@ -335,12 +337,12 @@ body {
 }
 
 #venues .v-times b.ta {
-  color: #4fd382;
+  color: #6b9bff;
   font-weight: 600;
 }
 
 #venues .v-times b.tb {
-  color: #ff9c67;
+  color: #ff8078;
   font-weight: 600;
 }
 
@@ -469,11 +471,11 @@ body {
 }
 
 .pop-times .ca {
-  color: #4fd382;
+  color: #6b9bff;
 }
 
 .pop-times .cb {
-  color: #ff9c67;
+  color: #ff8078;
 }
 
 .pop-link {
@@ -681,11 +683,11 @@ body {
 }
 
 .detail-times .ca {
-  color: #4fd382;
+  color: #6b9bff;
 }
 
 .detail-times .cb {
-  color: #ff9c67;
+  color: #ff8078;
 }
 
 .detail-times .gap {
@@ -746,11 +748,11 @@ body {
 }
 
 .bias-labels .bias-a {
-  color: #4fd382;
+  color: #6b9bff;
 }
 
 .bias-labels .bias-b {
-  color: #ff9c67;
+  color: #ff8078;
 }
 
 #bias-val {

@@ -4,7 +4,7 @@ import venuesData from './data/venues.json';
 import subwayData from './data/subway.json';
 import { NYC_GRID } from './lib/geo';
 import { buildGraph, type TransitGraph } from './lib/transit';
-import { timeField, comboLayer, averageLayers, scoreAtPoint } from './lib/fairness';
+import { timeField, comboLayer, maxLayers, minPersonField, scoreAtPoint, fairnessScore } from './lib/fairness';
 import { renderHeat } from './lib/heat';
 import { filterVenues } from './lib/venues';
 import { geocode, makeSuggester, type GeoHit } from './lib/geocode';
@@ -362,8 +362,8 @@ function recompute(venuesOnly: boolean): void {
   if (!venuesOnly || lastLayers.length === 0) {
     const combos = activeCombos().filter((c) => c.on);
     lastLayers = combos.map((c) => comboLayer(c.a, c.b, getField('A', c.a), getField('B', c.b), state.bias));
-    const avg = averageLayers(lastLayers, CELLS);
-    const canvas = renderHeat(avg, GRID);
+    const agg = maxLayers(lastLayers, CELLS);
+    const canvas = renderHeat(agg, minPersonField(lastLayers, 'A', CELLS), minPersonField(lastLayers, 'B', CELLS), GRID);
     const url = canvas.toDataURL();
     if (heatOverlay) heatOverlay.setUrl(url);
     else {
@@ -526,7 +526,8 @@ function renderVenues(): void {
   const maxScore = scored[0].s.score;
   for (const { v, s } of scored) {
     const { combos, refined } = effectiveCombos(v, s.combos);
-    const best = combos.reduce((p, c) => (Math.abs(c.tA - c.tB) < Math.abs(p.tA - p.tB) ? c : p));
+    // Headline = the combo that actually earned the rank (bias-aware score, refined times).
+    const best = combos.reduce((p, c) => (fairnessScore(c.tA, c.tB, state.bias) > fairnessScore(p.tA, p.tB, state.bias) ? c : p));
     // Fully-vegan places get the MTA-green ring; vegan-friendly a fainter one.
     const ring = v.vegan === 2 ? '#00e05c' : v.vegan === 1 ? '#7dedaa' : '#fff';
     const dot = L.circleMarker([v.lat, v.lng], {

@@ -10,6 +10,7 @@ const osrm = (port: number) => ({
 
 export default defineConfig({
   server: {
+    host: true, // bind all interfaces so 127.0.0.1 (Chrome) works, not just ::1
     proxy: {
       '/osrm/car': osrm(5001),
       '/osrm/bike': osrm(5002),

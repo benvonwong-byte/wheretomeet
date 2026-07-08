@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { haversineKm, NYC_GRID, cellCenter, pointToCell, cellIndex } from './geo';
 import { directTimeMin, walkMin } from './modes';
 import { buildGraph, stationTimes, transitField } from './transit';
-import { fairnessScore, comboLayer, averageLayers, timeField, scoreAtPoint } from './fairness';
+import { fairnessScore, comboLayer, maxLayers, minPersonField, timeField, scoreAtPoint } from './fairness';
 import { filterVenues } from './venues';
 import type { SubwayData, Venue } from './types';
 
@@ -132,20 +132,42 @@ describe('fairness', () => {
     expect(fairnessScore(10, 10)).toBeGreaterThan(fairnessScore(40, 40));
   });
 
-  it('gap dominates: 20/20 beats 5/35 (same max... no, same total)', () => {
+  it('same total: fair split beats lopsided split', () => {
     expect(fairnessScore(20, 20)).toBeGreaterThan(fairnessScore(5, 35));
+  });
+
+  it('total time is primary: mildly-uneven fast spot beats perfectly-even slow spot', () => {
+    // 12+18=30 total with 6-min gap should beat 25+25=50 total dead-even.
+    expect(fairnessScore(12, 18)).toBeGreaterThan(fairnessScore(25, 25));
   });
 
   it('unreachable scores zero', () => {
     expect(fairnessScore(Infinity, 10)).toBe(0);
   });
 
-  it('averageLayers averages and handles empty', () => {
+  it('maxLayers takes the best combo per cell and handles empty', () => {
     const a = comboLayer('bike', 'car', new Float32Array([10, 20]), new Float32Array([10, 40]));
     const b = comboLayer('walk', 'walk', new Float32Array([10, 20]), new Float32Array([10, 20]));
-    const avg = averageLayers([a, b], 2);
-    expect(avg[0]).toBeCloseTo((a.scores[0] + b.scores[0]) / 2, 5);
-    expect(averageLayers([], 2)[0]).toBe(0);
+    const agg = maxLayers([a, b], 2);
+    expect(agg[0]).toBeCloseTo(Math.max(a.scores[0], b.scores[0]), 5);
+    expect(maxLayers([], 2)[0]).toBe(0);
+  });
+
+  it('toggling on a slow combo never dims a good cell (max, not mean)', () => {
+    const fast = comboLayer('bike', 'car', new Float32Array([12]), new Float32Array([15]));
+    const slow = comboLayer('walk', 'walk', new Float32Array([38]), new Float32Array([39]));
+    const withoutSlow = maxLayers([fast], 1)[0];
+    const withSlow = maxLayers([fast, slow], 1)[0];
+    expect(withSlow).toBeCloseTo(withoutSlow, 6);
+  });
+
+  it('minPersonField takes each person best active mode per cell', () => {
+    const a = comboLayer('bike', 'car', new Float32Array([10, 30]), new Float32Array([12, 40]));
+    const b = comboLayer('transit', 'car', new Float32Array([15, 20]), new Float32Array([12, 40]));
+    const mA = minPersonField([a, b], 'A', 2);
+    const mB = minPersonField([a, b], 'B', 2);
+    expect([...mA]).toEqual([10, 20]);
+    expect([...mB]).toEqual([12, 40]);
   });
 
   it('timeField for bike is monotone in distance from origin', () => {
