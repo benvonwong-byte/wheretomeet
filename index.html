@@ -4,6 +4,60 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Thyme &amp; Place — vegan meetups, halfway &amp; on thyme · NYC</title>
+    <meta
+      name="description"
+      content="Find the fair place to meet in NYC. Enter two addresses, pick how you each travel (subway, bike, car, walk), and get vegan-friendly restaurants, tea houses & activities ranked by real travel time — fair for both of you."
+    />
+    <link rel="canonical" href="https://benvonwong-byte.github.io/wheretomeet/" />
+    <meta name="theme-color" content="#61a60e" />
+    <meta name="robots" content="index, follow" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Thyme &amp; Place" />
+    <meta property="og:title" content="Thyme &amp; Place — vegan meetups, halfway &amp; on thyme" />
+    <meta
+      property="og:description"
+      content="Two addresses in, fair vegan spots out — NYC restaurants, tea houses & activities ranked by real subway, bike, car & walk times for both of you."
+    />
+    <meta property="og:url" content="https://benvonwong-byte.github.io/wheretomeet/" />
+    <meta property="og:image" content="https://benvonwong-byte.github.io/wheretomeet/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:locale" content="en_US" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Thyme &amp; Place — vegan meetups, halfway &amp; on thyme" />
+    <meta
+      name="twitter:description"
+      content="Two addresses in, fair vegan spots out — NYC vegan restaurants, tea houses & activities ranked by real travel time for both of you."
+    />
+    <meta name="twitter:image" content="https://benvonwong-byte.github.io/wheretomeet/og.png" />
+
+    <meta name="geo.region" content="US-NY" />
+    <meta name="geo.placename" content="New York City" />
+    <meta name="ICBM" content="40.7128, -74.0060" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Thyme & Place",
+        "alternateName": "Thyme and Place NYC",
+        "url": "https://benvonwong-byte.github.io/wheretomeet/",
+        "description": "A fair-meeting-point finder for New York City. Enter two addresses and each person's travel modes (subway, bike, car, walk); it maps where meeting is fastest and fairest for both people and ranks vegan-friendly restaurants, tea houses and activities there using real MTA schedules and street routing.",
+        "applicationCategory": "TravelApplication",
+        "operatingSystem": "Web browser",
+        "browserRequirements": "Requires JavaScript",
+        "image": "https://benvonwong-byte.github.io/wheretomeet/og.png",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "areaServed": {
+          "@type": "City",
+          "name": "New York",
+          "sameAs": "https://en.wikipedia.org/wiki/New_York_City"
+        },
+        "keywords": "vegan restaurants NYC, meet in the middle, fair meeting point, tea houses, bubble tea, meetup planner, halfway point finder, New York City"
+      }
+    </script>
     <link
       rel="icon"
       href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌿</text></svg>"
@@ -33,6 +87,7 @@
             <input id="addr-a" type="text" placeholder="Person A address…" autocomplete="off" />
           </div>
           <div class="modes" id="modes-a"></div>
+          <button id="swap-ab" title="Swap Person A ↔ Person B">⇅</button>
         </section>
 
         <section class="person" data-person="B">

@@ -172,6 +172,35 @@ function makePersonMarker(who: 'A' | 'B'): L.Marker {
 
 const markers = { A: makePersonMarker('A'), B: makePersonMarker('B') };
 
+// ── Swap A ↔ B ───────────────────────────────────────────────
+function swapPersons(): void {
+  const tmp = state.A;
+  state.A = state.B;
+  state.B = tmp;
+
+  // Rename cached fields instead of recomputing them.
+  const rename = (k: string) => (k.startsWith('A:') ? 'B' + k.slice(1) : k.startsWith('B:') ? 'A' + k.slice(1) : k);
+  const fields = [...fieldCache].map(([k, v]) => [rename(k), v] as const);
+  fieldCache.clear();
+  for (const [k, v] of fields) fieldCache.set(k, v);
+  const upgrades = [...fieldUpgrades].map(([k, v]) => [rename(k), v] as const);
+  fieldUpgrades.clear();
+  for (const [k, v] of upgrades) fieldUpgrades.set(k, v);
+  const tmpExact = exactCache.A;
+  exactCache.A = exactCache.B;
+  exactCache.B = tmpExact;
+
+  markers.A.setLatLng(state.A.pt);
+  markers.B.setLatLng(state.B.pt);
+  const inA = document.getElementById('addr-a') as HTMLInputElement;
+  const inB = document.getElementById('addr-b') as HTMLInputElement;
+  [inA.value, inB.value] = [inB.value, inA.value];
+  renderModes('A');
+  renderModes('B');
+  closeDetail();
+  scheduleRecompute();
+}
+
 // ── UI: mode pills ───────────────────────────────────────────
 function renderModes(who: 'A' | 'B'): void {
   const el = document.getElementById(`modes-${who.toLowerCase()}`)!;
@@ -827,6 +856,8 @@ if (shared.labelB) (document.getElementById('addr-b') as HTMLInputElement).value
   slider.value = String(state.tolerance);
   document.getElementById('bias-val')!.textContent = state.tolerance === 0 ? 'EQUAL TIMES' : `±${state.tolerance}′`;
 }
+
+document.getElementById('swap-ab')!.onclick = swapPersons;
 
 document.getElementById('share-link')!.onclick = async () => {
   syncUrl();

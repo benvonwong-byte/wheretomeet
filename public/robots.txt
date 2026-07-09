@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://benvonwong-byte.github.io/wheretomeet/sitemap.xml

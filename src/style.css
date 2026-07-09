@@ -113,6 +113,30 @@ body {
 .person {
   padding: 14px 20px 12px;
   border-bottom: 1px solid var(--line);
+  position: relative;
+}
+
+#swap-ab {
+  position: absolute;
+  right: 20px;
+  bottom: -16px;
+  z-index: 5;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid var(--vegan);
+  background: #fff;
+  color: var(--vegan);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+  transition: transform 0.18s, background 0.12s;
+}
+
+#swap-ab:hover {
+  transform: rotate(180deg);
+  background: #f2f8e8;
 }
 
 .person-head {

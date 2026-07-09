@@ -1,0 +1,53 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="heatA" cx="0.35" cy="0.55" r="0.55">
+      <stop offset="0%" stop-color="#61a60e" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#61a60e" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="heatB" cx="0.72" cy="0.42" r="0.55">
+      <stop offset="0%" stop-color="#7b2cbf" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#7b2cbf" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="heatMid" cx="0.53" cy="0.5" r="0.34">
+      <stop offset="0%" stop-color="#ffcd14" stop-opacity="0.95"/>
+      <stop offset="70%" stop-color="#ffcd14" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#ffcd14" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="#ffffff"/>
+  <!-- faint street grid -->
+  <g stroke="#e2e7dd" stroke-width="2">
+    <path d="M0 105 H1200 M0 210 H1200 M0 315 H1200 M0 420 H1200 M0 525 H1200"/>
+    <path d="M150 0 V630 M300 0 V630 M450 0 V630 M600 0 V630 M750 0 V630 M900 0 V630 M1050 0 V630"/>
+  </g>
+  <!-- advantage heat -->
+  <rect width="1200" height="630" fill="url(#heatA)"/>
+  <rect width="1200" height="630" fill="url(#heatB)"/>
+  <rect width="1200" height="630" fill="url(#heatMid)"/>
+
+  <!-- person pins -->
+  <g font-family="Helvetica, Arial, sans-serif" font-weight="bold" text-anchor="middle">
+    <circle cx="330" cy="400" r="34" fill="#4f8f00" stroke="#ffffff" stroke-width="6"/>
+    <text x="330" y="413" font-size="36" fill="#ffffff">A</text>
+    <circle cx="880" cy="230" r="34" fill="#7b2cbf" stroke="#ffffff" stroke-width="6"/>
+    <text x="880" y="243" font-size="36" fill="#ffffff">B</text>
+  </g>
+  <!-- venue dots in the middle -->
+  <g stroke="#ffffff" stroke-width="4">
+    <circle cx="600" cy="330" r="17" fill="#e0445a"/>
+    <circle cx="655" cy="292" r="14" fill="#f08c1d"/>
+    <circle cx="560" cy="280" r="14" fill="#e2b400"/>
+    <circle cx="628" cy="376" r="13" fill="#e0445a"/>
+  </g>
+  <text x="600" y="273" font-size="30" text-anchor="middle" font-family="Helvetica, Arial, sans-serif">🌱</text>
+
+  <!-- wordmark panel -->
+  <rect x="60" y="60" width="620" height="150" rx="18" fill="#ffffff" opacity="0.94"/>
+  <text x="92" y="145" font-family="Georgia, 'Times New Roman', serif" font-weight="bold" font-size="64" fill="#1f2617">Thyme <tspan fill="#61a60e" font-style="italic">&amp;</tspan> Place</text>
+  <text x="94" y="186" font-family="Helvetica, Arial, sans-serif" font-size="24" letter-spacing="4" fill="#7f8874">VEGAN MEETUPS, HALFWAY &amp; ON THYME · NYC</text>
+
+  <!-- bottom strip -->
+  <rect x="60" y="500" width="1080" height="70" rx="14" fill="#ffffff" opacity="0.94"/>
+  <text x="92" y="545" font-family="Helvetica, Arial, sans-serif" font-size="26" fill="#3c4433">Two addresses in, fair vegan spots out — ranked by real subway, bike, car &amp; walk times.</text>
+</svg>
