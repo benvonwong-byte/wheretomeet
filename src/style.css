@@ -1435,3 +1435,31 @@ body {
     font-size: 30px;
   }
 }
+
+/* ── Donation links (discrete, friendly) ── */
+.intro-donate {
+  margin: 14px 0 0;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.intro-donate a,
+.credits a.donate {
+  color: var(--vegan);
+  font-weight: 600;
+  text-decoration: none;
+  border-bottom: 1px dashed var(--vegan);
+  transition: border-bottom-color 0.12s, color 0.12s;
+}
+
+.intro-donate a:hover,
+.credits a.donate:hover {
+  color: #47791a;
+  border-bottom: 1px solid #47791a;
+}
+
+.credits {
+  line-height: 1.8;
+}
