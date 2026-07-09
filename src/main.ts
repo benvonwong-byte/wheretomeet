@@ -4,7 +4,7 @@ import venuesData from './data/venues.json';
 import subwayData from './data/subway.json';
 import { NYC_GRID } from './lib/geo';
 import { buildGraph, transitPath, type TransitGraph } from './lib/transit';
-import { timeField, comboLayer, minPersonField, scoreAtPoint, fairnessScore } from './lib/fairness';
+import { timeField, comboLayer, maxLayers, minPersonField, scoreAtPoint, fairnessScore } from './lib/fairness';
 import { maskField } from './lib/contours';
 import landmaskData from './data/landmask.json';
 import { renderHeat } from './lib/heat';
@@ -165,6 +165,7 @@ function makePersonMarker(who: 'A' | 'B'): L.Marker {
     clearPersonFields(who);
     exactCache[who].clear();
     (document.getElementById(`addr-${who.toLowerCase()}`) as HTMLInputElement).value = '';
+    coverageWarning(who);
     scheduleRecompute();
   });
   return marker;
@@ -376,14 +377,32 @@ function renderDietFilters(): void {
 }
 
 // ── UI: geocode inputs with autocomplete ─────────────────────
+function coverageWarning(who: 'A' | 'B'): void {
+  const p = state[who].pt;
+  const outside = p.lat < GRID.latMin || p.lat > GRID.latMax || p.lng < GRID.lngMin || p.lng > GRID.lngMax;
+  if (outside) {
+    setStatus(`Heads up: ${who} is outside NYC coverage — no subway data there, times are rough estimates`, 5000);
+  }
+}
+
+function warnIfOutsideCoverage(who: 'A' | 'B', pt: Pt): void {
+  const inside =
+    pt.lat >= GRID.latMin && pt.lat <= GRID.latMax && pt.lng >= GRID.lngMin && pt.lng <= GRID.lngMax;
+  if (!inside) {
+    setStatus(`Heads up: ${who} is outside NYC coverage — subway can't reach there, times are rough estimates`, 5000);
+  }
+}
+
 function applyLocation(who: 'A' | 'B', hit: GeoHit, input: HTMLInputElement): void {
   input.value = hit.label;
   input.classList.remove('bad');
   state[who].pt = hit.pt;
+  warnIfOutsideCoverage(who, hit.pt);
   clearPersonFields(who);
   exactCache[who].clear();
   markers[who].setLatLng(hit.pt);
   map.panTo(hit.pt);
+  coverageWarning(who);
   scheduleRecompute();
 }
 
@@ -508,14 +527,14 @@ function drawContours(): void {
   if (lastLayers.length === 0) return;
   const minA = maskField(minPersonField(lastLayers, 'A', CELLS), LANDMASK);
   const minB = maskField(minPersonField(lastLayers, 'B', CELLS), LANDMASK);
-  const total = new Float32Array(CELLS);
+  const scores = maxLayers(lastLayers, CELLS);
   const gap = new Float32Array(CELLS);
   for (let i = 0; i < CELLS; i++) {
-    total[i] = minA[i] + minB[i];
     gap[i] = minA[i] - minB[i];
+    if (!isFinite(minA[i]) || !isFinite(minB[i])) scores[i] = 0; // water/off-network
   }
 
-  const url = renderHeat(total, gap, GRID).toDataURL();
+  const url = renderHeat(scores, gap, GRID).toDataURL();
   if (heatOverlay) heatOverlay.setUrl(url);
   else {
     heatOverlay = L.imageOverlay(url, HEAT_BOUNDS, {

@@ -43,6 +43,23 @@ describe('modes', () => {
     // ~150m: car should NOT beat walking (parking overhead dominates)
     expect(directTimeMin(a, near, 'car')).toBeGreaterThan(walkMin(a, near));
   });
+
+  it('long drives use highway speeds, not Manhattan crawl (Paterson regression)', () => {
+    // Paterson NJ → Chelsea: ~25km straight-line. Real drive ≈ 34-45 min.
+    // The flat 22km/h model said 100 min, painting the whole city A-green.
+    const paterson = { lat: 40.9265, lng: -74.156 };
+    const chelsea = { lat: 40.741, lng: -74.002 };
+    const t = directTimeMin(paterson, chelsea, 'car');
+    expect(t).toBeGreaterThan(28);
+    expect(t).toBeLessThan(55);
+  });
+
+  it('short urban drives stay Manhattan-slow', () => {
+    // ~3km crosstown: still ~15-25 min with parking
+    const t = directTimeMin({ lat: 40.758, lng: -73.9855 }, { lat: 40.735, lng: -73.99 }, 'car');
+    expect(t).toBeGreaterThan(12);
+    expect(t).toBeLessThan(26);
+  });
 });
 
 // Tiny synthetic GTFS-style subway: line A over stations 0-1-2 (real segment

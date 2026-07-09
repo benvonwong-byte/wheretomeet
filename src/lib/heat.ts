@@ -15,39 +15,36 @@ export function advantageColor(gap: number): [number, number, number] {
   return [c0[0] + (c1[0] - c0[0]) * f, c0[1] + (c1[1] - c0[1]) * f, c0[2] + (c1[2] - c0[2]) * f];
 }
 
-// Heat focus: fully opaque inside the recommended zone (near the best combined
-// time), falling to nothing beyond it so the heat hugs the results.
-const ZONE_FULL_MIN = 8; // minutes past the optimum at full strength
-const ZONE_EDGE_MIN = 26; // gone entirely by here
+// Heat focus: alpha follows the SAME fairness score that ranks the venues, so
+// the heat sits exactly where recommendations live — and the tolerance dial
+// visibly reshapes it. (Keying on raw total time collapsed the zone onto the
+// nearer person and hid the even/purple ground: the Paterson regression.)
+const ZONE_CUTOFF = 0.3; // of the max score — below this the heat is gone
 const MAX_ALPHA = 232;
 
-export function renderHeat(total: TimeField, gap: TimeField, grid: GridSpec): HTMLCanvasElement {
+export function renderHeat(scores: TimeField, gap: TimeField, grid: GridSpec): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = grid.cols;
   canvas.height = grid.rows;
   const ctx = canvas.getContext('2d')!;
   const img = ctx.createImageData(grid.cols, grid.rows);
 
-  let minTotal = Infinity;
-  for (let i = 0; i < total.length; i++) if (total[i] < minTotal) minTotal = total[i];
-  if (!isFinite(minTotal)) return canvas;
+  let maxScore = 0;
+  for (let i = 0; i < scores.length; i++) if (scores[i] > maxScore) maxScore = scores[i];
+  if (maxScore <= 0) return canvas;
 
   for (let r = 0; r < grid.rows; r++) {
     for (let c = 0; c < grid.cols; c++) {
       const i = r * grid.cols + c;
       const o = ((grid.rows - 1 - r) * grid.cols + c) * 4; // grid row 0 is south
-      if (!isFinite(total[i])) {
-        img.data[o + 3] = 0;
-        continue;
-      }
-      const d = total[i] - minTotal;
-      const zone = Math.max(0, Math.min(1, 1 - (d - ZONE_FULL_MIN) / (ZONE_EDGE_MIN - ZONE_FULL_MIN)));
-      if (zone <= 0) continue;
+      const s = scores[i] / maxScore;
+      if (!(s > ZONE_CUTOFF)) continue;
+      const zone = (s - ZONE_CUTOFF) / (1 - ZONE_CUTOFF);
       const [cr, cg, cb] = advantageColor(gap[i]);
       img.data[o] = cr;
       img.data[o + 1] = cg;
       img.data[o + 2] = cb;
-      img.data[o + 3] = MAX_ALPHA * zone ** 1.3;
+      img.data[o + 3] = MAX_ALPHA * (0.35 + 0.65 * zone ** 0.8);
     }
   }
   ctx.putImageData(img, 0, 0);
