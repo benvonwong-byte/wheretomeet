@@ -2,9 +2,9 @@ import L from 'leaflet';
 import './style.css';
 import venuesData from './data/venues.json';
 import subwayData from './data/subway.json';
-import { NYC_GRID } from './lib/geo';
+import { NYC_GRID, pointToCell } from './lib/geo';
 import { buildGraph, transitPath, type TransitGraph } from './lib/transit';
-import { timeField, comboLayer, maxLayers, minPersonField, scoreAtPoint, fairnessScore } from './lib/fairness';
+import { timeField, comboLayer, minPersonField, scoreAtPoint, fairnessScore } from './lib/fairness';
 import { maskField } from './lib/contours';
 import landmaskData from './data/landmask.json';
 import { renderHeat } from './lib/heat';
@@ -509,9 +509,8 @@ function recompute(venuesOnly: boolean): void {
   if (!venuesOnly || lastLayers.length === 0) {
     const combos = activeCombos().filter((c) => c.on);
     lastLayers = combos.map((c) => comboLayer(c.a, c.b, getField('A', c.a), getField('B', c.b), state.tolerance));
-    drawContours();
   }
-  renderVenues();
+  renderVenues(); // heat follows the venue list (drawn at the end of renderVenues)
   setStatus('Ready', 900);
 }
 
@@ -523,18 +522,18 @@ const LANDMASK = (landmaskData as { mask: string }).mask;
 const HEAT_BOUNDS = L.latLngBounds([GRID.latMin, GRID.lngMin], [GRID.latMax, GRID.lngMax]);
 let heatOverlay: L.ImageOverlay | null = null;
 
+let shownVenueCells: number[] = []; // grid cells of the currently listed venues
+
 function drawContours(): void {
   if (lastLayers.length === 0) return;
   const minA = maskField(minPersonField(lastLayers, 'A', CELLS), LANDMASK);
   const minB = maskField(minPersonField(lastLayers, 'B', CELLS), LANDMASK);
-  const scores = maxLayers(lastLayers, CELLS);
   const gap = new Float32Array(CELLS);
   for (let i = 0; i < CELLS; i++) {
     gap[i] = minA[i] - minB[i];
-    if (!isFinite(minA[i]) || !isFinite(minB[i])) scores[i] = 0; // water/off-network
   }
 
-  const url = renderHeat(scores, gap, GRID).toDataURL();
+  const url = renderHeat(gap, shownVenueCells, GRID).toDataURL();
   if (heatOverlay) heatOverlay.setUrl(url);
   else {
     heatOverlay = L.imageOverlay(url, HEAT_BOUNDS, {
@@ -775,6 +774,8 @@ function renderVenues(): void {
 
   if (!scored.length) {
     listEl.innerHTML = '<li class="empty">No venues in the fair zone — widen filters or move a pin.</li>';
+    shownVenueCells = [];
+    drawContours();
     return;
   }
 
@@ -821,6 +822,8 @@ function renderVenues(): void {
   }
 
   void refineVenues(candidates.map((x) => x.v));
+  shownVenueCells = scored.map((x) => pointToCell(GRID, x.v));
+  drawContours();
   renderShortlist(favs);
   syncUrl();
 }
