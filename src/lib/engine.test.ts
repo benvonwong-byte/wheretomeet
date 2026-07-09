@@ -219,19 +219,19 @@ describe('fairness', () => {
 });
 
 describe('advantage color', () => {
-  it('diverges: A turf indigo, balanced honey, B turf terracotta — and clamps', () => {
-    expect(advantageColor(-25)).toEqual([79, 99, 210]); // full A indigo
-    expect(advantageColor(-60)).toEqual([79, 99, 210]); // clamped
-    expect(advantageColor(0)).toEqual([232, 181, 74]); // honey seam
-    expect(advantageColor(25)).toEqual([210, 96, 74]); // full B terracotta
-    expect(advantageColor(60)).toEqual([210, 96, 74]); // clamped
+  it('diverges: A turf violet, seam thermal orange, B turf crimson — and clamps', () => {
+    expect(advantageColor(-25)).toEqual([124, 77, 255]); // full A violet
+    expect(advantageColor(-60)).toEqual([124, 77, 255]); // clamped
+    expect(advantageColor(0)).toEqual([251, 141, 52]); // thermal orange seam
+    expect(advantageColor(25)).toEqual([230, 72, 79]); // full B crimson
+    expect(advantageColor(60)).toEqual([230, 72, 79]); // clamped
   });
 
   it('interpolates smoothly between poles', () => {
-    const [r, g, b] = advantageColor(-12.5); // halfway A-indigo → honey
-    expect(r).toBeCloseTo((79 + 232) / 2, 0);
-    expect(g).toBeCloseTo((99 + 181) / 2, 0);
-    expect(b).toBeCloseTo((210 + 74) / 2, 0);
+    const [r, g, b] = advantageColor(-12.5); // halfway A-violet → orange
+    expect(r).toBeCloseTo((124 + 251) / 2, 0);
+    expect(g).toBeCloseTo((77 + 141) / 2, 0);
+    expect(b).toBeCloseTo((255 + 52) / 2, 0);
   });
 });
 

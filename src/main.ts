@@ -112,7 +112,7 @@ function activeCombos(): { a: Mode; b: Mode; key: string; on: boolean }[] {
 // ── Map ──────────────────────────────────────────────────────
 const map = L.map('map', { zoomControl: false }).setView([40.745, -73.96], 12);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   attribution: '© OpenStreetMap contributors © CARTO',
   maxZoom: 19,
 }).addTo(map);
@@ -301,7 +301,7 @@ function renderDietFilters(): void {
   const el = document.getElementById('diet-filters')!;
   el.innerHTML = '';
   const defs = [
-    { key: 'veganFriendly' as const, label: '🌱 VEGAN-FRIENDLY', cls: 'vegan' },
+    { key: 'veganFriendly' as const, label: '🌿 VEGAN-FRIENDLY', cls: 'vegan' },
     { key: 'veganOnly' as const, label: '🌱 FULLY VEGAN', cls: 'vegan' },
     { key: 'teaHouse' as const, label: '🍵 TEA HOUSE', cls: 'tea' },
     { key: 'bubbleTea' as const, label: '🧋 BUBBLE TEA', cls: 'boba' },
@@ -440,7 +440,7 @@ function recompute(venuesOnly: boolean): void {
     if (heatOverlay) heatOverlay.setUrl(url);
     else {
       heatOverlay = L.imageOverlay(url, HEAT_BOUNDS, {
-        opacity: 0.62,
+        opacity: 0.85,
         className: 'heat-img',
         interactive: false,
       }).addTo(map);
@@ -458,10 +458,10 @@ const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 
 function venueTags(v: Venue): string {
   const tags: string[] = [];
-  if (v.vegan === 2) tags.push('<span class="tag vegan2">100% vegan</span>');
-  else if (v.vegan === 1) tags.push('<span class="tag vegan1">vegan-friendly</span>');
-  if (v.tea === 1) tags.push('<span class="tag tea">tea house</span>');
-  else if (v.tea === 2) tags.push('<span class="tag boba">bubble tea</span>');
+  if (v.vegan === 2) tags.push('<span class="tag vegan2">🌱 100% vegan</span>');
+  else if (v.vegan === 1) tags.push('<span class="tag vegan1">🌿 vegan-friendly</span>');
+  if (v.tea === 1) tags.push('<span class="tag tea">🍵 tea house</span>');
+  else if (v.tea === 2) tags.push('<span class="tag boba">🧋 bubble tea</span>');
   tags.push(`<span class="tag">${v.cat}</span>`);
   return tags.join('');
 }
@@ -573,11 +573,12 @@ function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB
   };
 }
 
+// Thermal ramp for venue dot fills: dim violet → orange → white-yellow.
 function heatColor(t: number): string {
-  if (t > 0.8) return '#ff2d78';
-  if (t > 0.6) return '#ff7043';
-  if (t > 0.4) return '#ffb500';
-  return '#8b919c';
+  if (t > 0.8) return '#fcffa4';
+  if (t > 0.6) return '#fb8d34';
+  if (t > 0.4) return '#d95f69';
+  return '#7c6f9c';
 }
 
 // ── Exact street routing (OSRM) ──────────────────────────────

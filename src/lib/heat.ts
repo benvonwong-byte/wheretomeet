@@ -6,10 +6,11 @@ import type { GridSpec } from './types';
 //  - Gold seam between them = balanced ground (N/Q/R/W yellow)
 // Alpha = usability (combined travel time), so the seam glows brightest where
 // meeting is balanced AND fast, and the field fades where nobody should go.
-const A_RGB: [number, number, number] = [79, 99, 210]; // indigo — person A
-const B_RGB: [number, number, number] = [210, 96, 74]; // terracotta — person B
-const MID_RGB: [number, number, number] = [232, 181, 74]; // honey seam
-const HOT_RGB: [number, number, number] = [255, 244, 205]; // warm cream core
+// Thermal-imaging (inferno) palette, glowing over the dark basemap:
+const A_RGB: [number, number, number] = [124, 77, 255]; // violet — person A
+const B_RGB: [number, number, number] = [230, 72, 79]; // crimson — person B
+const MID_RGB: [number, number, number] = [251, 141, 52]; // thermal orange seam
+const HOT_RGB: [number, number, number] = [252, 255, 190]; // white-yellow core
 
 const GAP_RANGE = 25; // minutes of advantage for a full-strength hue
 const TOTAL_VIS_SCALE = 55; // combined minutes per e-fold of field fade
