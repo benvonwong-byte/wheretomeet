@@ -812,6 +812,7 @@ function renderShortlist(favs: Set<string>): void {
   const list = document.getElementById('shortlist-items')!;
   const items = [...favs].map((id) => VENUE_BY_ID.get(id)).filter((v): v is Venue => !!v);
   panel.hidden = items.length === 0;
+  panel.querySelector('h3')!.innerHTML = `♥ Your shortlist (${items.length}) <span class="sl-caret">▾</span>`;
   list.innerHTML = '';
   for (const v of items) {
     const s = scoreAtPoint(GRID, lastLayers, v);
@@ -858,6 +859,13 @@ if (shared.labelB) (document.getElementById('addr-b') as HTMLInputElement).value
 }
 
 document.getElementById('swap-ab')!.onclick = swapPersons;
+
+// Shortlist collapses to a badge on phones so it doesn't bury the map.
+{
+  const panel = document.getElementById('shortlist')!;
+  if (window.matchMedia('(max-width: 760px)').matches) panel.classList.add('collapsed');
+  panel.querySelector('h3')!.addEventListener('click', () => panel.classList.toggle('collapsed'));
+}
 
 document.getElementById('share-link')!.onclick = async () => {
   syncUrl();

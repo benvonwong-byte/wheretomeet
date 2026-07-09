@@ -68,24 +68,37 @@ export async function geocode(query: string): Promise<GeoHit | null> {
   return { pt, label: r.display_name.split(',').slice(0, 2).join(',') };
 }
 
-/** Debounced suggestion runner with stale-response cancellation. */
+/** Debounced suggestion runner with an LRU cache and stale-response cancellation. */
 export function makeSuggester(onResults: (hits: GeoHit[]) => void): (query: string) => void {
   let timer = 0;
   let ctrl: AbortController | null = null;
+  const cache = new Map<string, GeoHit[]>(); // insertion-ordered → LRU
+  const CACHE_MAX = 120;
+
   return (query: string) => {
     window.clearTimeout(timer);
     ctrl?.abort();
-    if (query.trim().length < 3) {
+    const q = query.trim().toLowerCase();
+    if (q.length < 3) {
       onResults([]);
+      return;
+    }
+    const hit = cache.get(q);
+    if (hit) {
+      onResults(hit); // instant on backspace/retype
       return;
     }
     timer = window.setTimeout(async () => {
       ctrl = new AbortController();
       try {
-        onResults(await suggest(query.trim(), ctrl.signal));
+        const hits = await suggest(q, ctrl.signal);
+        cache.delete(q);
+        cache.set(q, hits);
+        if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!);
+        onResults(hits);
       } catch {
         /* aborted or offline — keep quiet */
       }
-    }, 280);
+    }, 140);
   };
 }

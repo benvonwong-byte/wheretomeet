@@ -532,7 +532,7 @@ body {
 @media (max-width: 760px) {
   #app {
     grid-template-columns: 1fr;
-    grid-template-rows: 45% 55%;
+    grid-template-rows: 48% 52%;
   }
 
   #rail {
@@ -543,6 +543,40 @@ body {
 
   #map {
     order: 1;
+  }
+
+  /* iOS zooms the page when focused inputs are under 16px */
+  .person input {
+    font-size: 16px;
+  }
+
+  /* comfortable tap targets */
+  .mode-pill {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+
+  .chip {
+    padding: 8px 13px;
+  }
+
+  .fav-btn {
+    font-size: 20px;
+    padding: 0 7px;
+  }
+
+  .bias input[type='range'] {
+    height: 28px;
+  }
+
+  .brand {
+    padding: 14px 16px 12px;
+  }
+
+  .panel,
+  .person {
+    padding-left: 16px;
+    padding-right: 16px;
   }
 }
 /* the sweet-spot bloom */
@@ -1103,4 +1137,29 @@ body {
 
 .detail-rating.none .stars {
   color: #c9cec2;
+}
+
+#shortlist h3 {
+  cursor: pointer;
+  user-select: none;
+}
+
+.sl-caret {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+#shortlist.collapsed {
+  width: auto;
+  padding: 9px 14px;
+}
+
+#shortlist.collapsed h3 {
+  margin: 0;
+}
+
+#shortlist.collapsed #shortlist-items,
+#shortlist.collapsed #share-link,
+#shortlist.collapsed .shortlist-hint {
+  display: none;
 }
