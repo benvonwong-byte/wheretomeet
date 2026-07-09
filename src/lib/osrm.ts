@@ -132,6 +132,33 @@ export async function routedField(origin: Pt, mode: Mode, grid: GridSpec, step =
 }
 
 /**
+ * Street route geometry origin → dest for drawing on the map.
+ * Local OSRM first, public OSRM fallback. Null → caller draws a straight line.
+ */
+export async function routedGeometry(origin: Pt, dest: Pt, mode: Mode, signal?: AbortSignal): Promise<Pt[] | null> {
+  const q =
+    `/route/v1/driving/${origin.lng.toFixed(6)},${origin.lat.toFixed(6)};` +
+    `${dest.lng.toFixed(6)},${dest.lat.toFixed(6)}?overview=full&geometries=geojson`;
+  const bases: string[] = [];
+  const local = LOCAL_PATH[mode];
+  if (local) bases.push(local);
+  const profile = PROFILE[mode];
+  if (profile) bases.push(`https://routing.openstreetmap.de/${profile}`);
+  for (const base of bases) {
+    try {
+      const res = await fetch(base + q, { signal });
+      if (!res.ok) continue;
+      const json = (await res.json()) as { code: string; routes?: { geometry: { coordinates: [number, number][] } }[] };
+      const coords = json.routes?.[0]?.geometry?.coordinates;
+      if (json.code === 'Ok' && coords?.length) return coords.map(([lng, lat]) => ({ lat, lng }));
+    } catch {
+      /* next tier */
+    }
+  }
+  return null;
+}
+
+/**
  * One matrix request: origin → each destination via real street pathing.
  * Tier order: local self-hosted OSRM → public OSRM → public Valhalla.
  * Minutes include the mode's fixed overhead (parking etc.).

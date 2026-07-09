@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { haversineKm, NYC_GRID, cellCenter, pointToCell, cellIndex } from './geo';
 import { directTimeMin, walkMin } from './modes';
-import { buildGraph, stationTimes, transitField } from './transit';
+import { buildGraph, stationTimes, transitField, transitPath } from './transit';
 import { fairnessScore, comboLayer, maxLayers, minPersonField, timeField, scoreAtPoint } from './fairness';
 import { filterVenues } from './venues';
 import { advantageColor } from './heat';
@@ -106,6 +106,23 @@ describe('transit graph', () => {
     for (let i = 0; i < t.length; i++) expect(isFinite(t[i]), `station ${i} unreachable`).toBe(true);
   });
 
+  it('transitPath reconstructs the station chain in ride order', () => {
+    const origin = { lat: 40.7, lng: -74.0 }; // at S0
+    const dest = { lat: 40.7405, lng: -74.0 }; // near S2, ~4.5km away
+    const path = transitPath(g, origin, dest);
+    expect(path[0]).toEqual(origin);
+    expect(path[path.length - 1]).toEqual(dest);
+    // rides S0 → S1 → S2: interior points are those station coords in order
+    const lats = path.slice(1, -1).map((p) => p.lat);
+    expect(lats).toEqual([40.7, 40.72, 40.74]);
+  });
+
+  it('transitPath falls back to direct walk for next-door destinations', () => {
+    const origin = { lat: 40.7, lng: -74.0 };
+    const dest = { lat: 40.701, lng: -74.0 };
+    expect(transitPath(g, origin, dest)).toEqual([origin, dest]);
+  });
+
   it('transit field: near-origin cells are walkable, far cells served by train beat walking', () => {
     const grid = { latMin: 40.69, latMax: 40.76, lngMin: -74.02, lngMax: -73.93, rows: 20, cols: 20 };
     const origin = { lat: 40.7, lng: -74.0 };
@@ -202,29 +219,30 @@ describe('fairness', () => {
 });
 
 describe('advantage color', () => {
-  it('diverges: A turf blue, balanced gold, B turf red — and clamps', () => {
-    expect(advantageColor(-25)).toEqual([45, 100, 235]); // full A blue
-    expect(advantageColor(-60)).toEqual([45, 100, 235]); // clamped
-    expect(advantageColor(0)).toEqual([252, 204, 10]); // gold seam
-    expect(advantageColor(25)).toEqual([235, 55, 46]); // full B red
-    expect(advantageColor(60)).toEqual([235, 55, 46]); // clamped
+  it('diverges: A turf indigo, balanced honey, B turf terracotta — and clamps', () => {
+    expect(advantageColor(-25)).toEqual([79, 99, 210]); // full A indigo
+    expect(advantageColor(-60)).toEqual([79, 99, 210]); // clamped
+    expect(advantageColor(0)).toEqual([232, 181, 74]); // honey seam
+    expect(advantageColor(25)).toEqual([210, 96, 74]); // full B terracotta
+    expect(advantageColor(60)).toEqual([210, 96, 74]); // clamped
   });
 
   it('interpolates smoothly between poles', () => {
-    const [r, g, b] = advantageColor(-12.5); // halfway A-blue → gold
-    expect(r).toBeCloseTo((45 + 252) / 2, 0);
-    expect(g).toBeCloseTo((100 + 204) / 2, 0);
-    expect(b).toBeCloseTo((235 + 10) / 2, 0);
+    const [r, g, b] = advantageColor(-12.5); // halfway A-indigo → honey
+    expect(r).toBeCloseTo((79 + 232) / 2, 0);
+    expect(g).toBeCloseTo((99 + 181) / 2, 0);
+    expect(b).toBeCloseTo((210 + 74) / 2, 0);
   });
 });
 
 describe('venue emoji + favorites', () => {
   const base = { id: 'x', name: 'X', lat: 0, lng: 0, addr: '', cuisine: '' };
 
-  it('tea classes and vegan outrank cuisine', () => {
+  it('emoji is the NARROW type: cuisine beats broad diet attributes', () => {
     expect(venueEmoji({ ...base, cat: 'cafe', vegan: 0, tea: 1 } as Venue)).toBe('🍵');
     expect(venueEmoji({ ...base, cat: 'cafe', vegan: 0, tea: 2 } as Venue)).toBe('🧋');
-    expect(venueEmoji({ ...base, cat: 'restaurant', vegan: 2, tea: 0, cuisine: 'pizza' } as Venue)).toBe('🌱');
+    // a fully-vegan pizzeria is a PIZZERIA (vegan-ness = ring + leaf badge)
+    expect(venueEmoji({ ...base, cat: 'restaurant', vegan: 2, tea: 0, cuisine: 'pizza' } as Venue)).toBe('🍕');
   });
 
   it('maps cuisine tokens and activity names', () => {

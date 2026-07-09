@@ -48,10 +48,11 @@ const ACTIVITY_EMOJI: [RegExp, string][] = [
   [/dance/i, '💃'],
 ];
 
+// The emoji slot is the venue's NARROW type (cuisine/activity). Diet
+// attributes like vegan are broad — they get the ring + leaf badge instead.
 export function venueEmoji(v: Venue): string {
   if (v.tea === 1) return '🍵';
   if (v.tea === 2) return '🧋';
-  if (v.vegan === 2) return '🌱';
   if (v.cat === 'activity') {
     for (const [re, e] of ACTIVITY_EMOJI) if (re.test(v.name)) return e;
     return '🎟️';

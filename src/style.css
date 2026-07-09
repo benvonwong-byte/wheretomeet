@@ -1,17 +1,17 @@
 :root {
-  --ink: #0d0f12;
-  --rail: #14171c;
-  --rail-2: #1b1f26;
-  --line: #2a2f38;
-  --paper: #f4f1ea;
-  --text: #e8e5dd;
-  --dim: #8b919c;
-  --a: #0039a6; /* MTA A/C/E blue */
-  --b: #ee352e; /* MTA 1/2/3 red */
-  --hot: #ff2d78;
-  --amber: #ffb500;
+  --ink: #10130c;
+  --rail: #171b12;
+  --rail-2: #20261a;
+  --line: #323b28;
+  --paper: #f5f1e3;
+  --text: #e9e5d6;
+  --dim: #939b87;
+  --a: #4f63d2; /* person A: indigo */
+  --b: #d2604a; /* person B: terracotta */
+  --hot: #e85d75; /* raspberry accents (favorites, hottest dots) */
+  --amber: #e8b54a; /* honey gold — seam, highlights */
   --teal: #00b3a4;
-  --vegan: #00933c; /* MTA 4/5/6 green */
+  --vegan: #63b26d; /* matcha green — the brand */
   --mono: 'IBM Plex Mono', ui-monospace, monospace;
   --sans: 'Archivo', sans-serif;
 }
@@ -66,7 +66,7 @@ body {
 .brand h1 {
   font-weight: 900;
   font-stretch: 105%;
-  font-size: 30px;
+  font-size: 25px;
   letter-spacing: -0.02em;
   margin: 0;
   line-height: 1;
@@ -75,7 +75,7 @@ body {
 
 .brand h1 em {
   font-style: normal;
-  color: var(--amber);
+  color: var(--vegan);
 }
 
 .tagline {
@@ -205,7 +205,7 @@ body {
   border-radius: 3px;
   border: 1px solid var(--line);
   /* A-blue → gold core → B-red, matching the map washes */
-  background: linear-gradient(90deg, rgba(45, 100, 235, 0.75), #fccc0a, rgba(235, 55, 46, 0.75));
+  background: linear-gradient(90deg, rgba(79, 99, 210, 0.8), #e8b54a, rgba(210, 96, 74, 0.8));
   flex: none;
   transition: opacity 0.12s;
 }
@@ -272,15 +272,15 @@ body {
 }
 
 .chip.hero.on.vegan {
-  background: #0d3d22;
+  background: #1c2f1c;
   border-color: var(--vegan);
-  color: #7dedaa;
+  color: #9fd8a4;
 }
 
 .chip.hero.on.tea {
-  background: #3d2c0d;
+  background: #322913;
   border-color: var(--amber);
-  color: #ffd977;
+  color: #f0cf8a;
 }
 
 /* ── Venue list ───────────────────────── */
@@ -337,12 +337,12 @@ body {
 }
 
 #venues .v-times b.ta {
-  color: #6b9bff;
+  color: #97a7ff;
   font-weight: 600;
 }
 
 #venues .v-times b.tb {
-  color: #ff8078;
+  color: #ff9b82;
   font-weight: 600;
 }
 
@@ -364,18 +364,18 @@ body {
 }
 
 .tag.vegan2 {
-  background: #0d3d22;
-  color: #7dedaa;
+  background: #1c2f1c;
+  color: #9fd8a4;
 }
 
 .tag.vegan1 {
-  background: #12301e;
-  color: #5cb883;
+  background: #182818;
+  color: #7dbb84;
 }
 
 .tag.tea {
-  background: #3d2c0d;
-  color: #ffd977;
+  background: #322913;
+  color: #f0cf8a;
 }
 
 .empty {
@@ -397,7 +397,7 @@ body {
 /* ── Map ──────────────────────────────── */
 #map {
   height: 100%;
-  background: #dfdcd3;
+  background: #ece8da;
 }
 
 .leaflet-container {
@@ -471,11 +471,11 @@ body {
 }
 
 .pop-times .ca {
-  color: #6b9bff;
+  color: #97a7ff;
 }
 
 .pop-times .cb {
-  color: #ff8078;
+  color: #ff9b82;
 }
 
 .pop-link {
@@ -688,11 +688,11 @@ body {
 }
 
 .detail-times .ca {
-  color: #6b9bff;
+  color: #97a7ff;
 }
 
 .detail-times .cb {
-  color: #ff8078;
+  color: #ff9b82;
 }
 
 .detail-times .gap {
@@ -753,11 +753,11 @@ body {
 }
 
 .bias-labels .bias-a {
-  color: #6b9bff;
+  color: #97a7ff;
 }
 
 .bias-labels .bias-b {
-  color: #ff8078;
+  color: #ff9b82;
 }
 
 #bias-val {
@@ -780,7 +780,7 @@ body {
 .adv-bar {
   height: 10px;
   border-radius: 5px;
-  background: linear-gradient(90deg, rgb(45, 100, 235), rgb(252, 204, 10), rgb(235, 55, 46));
+  background: linear-gradient(90deg, rgb(79, 99, 210), rgb(232, 181, 74), rgb(210, 96, 74));
   border: 1px solid var(--line);
 }
 
@@ -795,7 +795,7 @@ body {
 }
 
 .adv-labels .adv-a {
-  color: #6b9bff;
+  color: #97a7ff;
 }
 
 .adv-labels .adv-mid {
@@ -804,7 +804,7 @@ body {
 }
 
 .adv-labels .adv-b {
-  color: #ff8078;
+  color: #ff9b82;
 }
 
 .layers-head {
@@ -822,14 +822,14 @@ body {
 
 /* bubble tea = taro purple, distinct from tea-house gold */
 .chip.hero.on.boba {
-  background: #2e1f3d;
-  border-color: #a678de;
-  color: #cdaaf5;
+  background: #292036;
+  border-color: #9d84cf;
+  color: #c9b4ea;
 }
 
 .tag.boba {
-  background: #2e1f3d;
-  color: #cdaaf5;
+  background: #292036;
+  color: #c9b4ea;
 }
 
 /* ── Emoji venue pins ─────────────────── */
@@ -850,8 +850,8 @@ body {
 
 .venue-pin.top-rated {
   box-shadow:
-    0 0 0 2px rgba(252, 204, 10, 0.9),
-    0 0 12px 3px rgba(252, 204, 10, 0.55);
+    0 0 0 2px rgba(232, 181, 74, 0.95),
+    0 0 12px 3px rgba(232, 181, 74, 0.6);
 }
 
 .pin-fav {
@@ -859,7 +859,7 @@ body {
   top: -7px;
   right: -6px;
   font-size: 11px;
-  color: #ff2d78;
+  color: var(--hot);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
@@ -896,12 +896,12 @@ body {
 }
 
 .fav-btn:hover {
-  color: #ff8bb3;
+  color: #f08ba0;
   transform: scale(1.15);
 }
 
 .fav-btn.on {
-  color: #ff2d78;
+  color: var(--hot);
 }
 
 #venues .v-side {
@@ -911,8 +911,8 @@ body {
 }
 
 #venues li.faved {
-  background: rgba(255, 45, 120, 0.05);
-  border-left: 2px solid #ff2d78;
+  background: rgba(232, 93, 117, 0.06);
+  border-left: 2px solid var(--hot);
   padding-left: 6px;
   margin-left: -8px;
 }
@@ -927,4 +927,12 @@ body {
   border-radius: 50%;
   background: rgba(13, 15, 18, 0.75);
   font-size: 13px;
+}
+
+.pin-leaf {
+  position: absolute;
+  bottom: -6px;
+  right: -6px;
+  font-size: 10px;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.5));
 }

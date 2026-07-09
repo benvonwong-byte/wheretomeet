@@ -3,12 +3,12 @@ import './style.css';
 import venuesData from './data/venues.json';
 import subwayData from './data/subway.json';
 import { NYC_GRID } from './lib/geo';
-import { buildGraph, type TransitGraph } from './lib/transit';
+import { buildGraph, transitPath, type TransitGraph } from './lib/transit';
 import { timeField, comboLayer, maxLayers, minPersonField, scoreAtPoint, fairnessScore } from './lib/fairness';
 import { renderHeat } from './lib/heat';
 import { filterVenues } from './lib/venues';
 import { geocode, makeSuggester, type GeoHit } from './lib/geocode';
-import { routedMinutes, routedField } from './lib/osrm';
+import { routedMinutes, routedField, routedGeometry } from './lib/osrm';
 import { venueEmoji } from './lib/emoji';
 import { loadFavs, toggleFav } from './lib/favs';
 import type { Pt, Mode, Venue, ComboLayer, TimeField, SubwayData, Daypart } from './lib/types';
@@ -112,7 +112,7 @@ function activeCombos(): { a: Mode; b: Mode; key: string; on: boolean }[] {
 // ── Map ──────────────────────────────────────────────────────
 const map = L.map('map', { zoomControl: false }).setView([40.745, -73.96], 12);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
   attribution: '© OpenStreetMap contributors © CARTO',
   maxZoom: 19,
 }).addTo(map);
@@ -491,11 +491,45 @@ function metaLine(v: Venue): string {
   return bits.join(' · ');
 }
 
+// ── Route drawing (A & B paths to the selected venue) ────────
+const routeLayer = L.layerGroup().addTo(map);
+let routeToken = 0;
+
+async function personRoute(who: 'A' | 'B', mode: Mode, v: Venue): Promise<Pt[]> {
+  const origin = state[who].pt;
+  const dest = { lat: v.lat, lng: v.lng };
+  if (mode === 'transit') return transitPath(getGraph(state.daypart), origin, dest);
+  return (await routedGeometry(origin, dest, mode)) ?? [origin, dest];
+}
+
+async function drawRoutes(v: Venue, modeA: Mode, modeB: Mode): Promise<void> {
+  const token = ++routeToken;
+  const [pathA, pathB] = await Promise.all([personRoute('A', modeA, v), personRoute('B', modeB, v)]);
+  if (token !== routeToken) return; // another venue selected meanwhile
+  routeLayer.clearLayers();
+  const style = (color: string, mode: Mode) => ({
+    color,
+    weight: 4,
+    opacity: 0.85,
+    dashArray: mode === 'transit' ? '2 8' : undefined, // transit = schematic station hops
+    lineCap: 'round' as const,
+  });
+  const a = L.polyline(pathA, style('#4f63d2', modeA)).addTo(routeLayer);
+  const b = L.polyline(pathB, style('#d2604a', modeB)).addTo(routeLayer);
+  map.fitBounds(a.getBounds().extend(b.getBounds()), {
+    paddingTopLeft: [40, 40],
+    paddingBottomRight: [40, 220],
+    maxZoom: 14,
+  });
+}
+
 // ── Detail panel ─────────────────────────────────────────────
 const detailEl = document.getElementById('detail') as HTMLElement;
 
 function closeDetail(): void {
   detailEl.hidden = true;
+  routeToken++;
+  routeLayer.clearLayers();
 }
 
 function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB: number }[]): void {
@@ -529,6 +563,8 @@ function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB
     `<a href="${gmaps(v)}" target="_blank" rel="noopener">Google Maps ↗</a>` +
     `</div></div>`;
   detailEl.hidden = false;
+  const headline = pickCombo(combos, state.sortBy);
+  void drawRoutes(v, headline.modeA, headline.modeB);
   detailEl.querySelector<HTMLButtonElement>('.detail-close')!.onclick = closeDetail;
   detailEl.querySelector<HTMLButtonElement>('.detail-fav')!.onclick = () => {
     toggleFav(state.A.pt, state.B.pt, v.id);
@@ -650,7 +686,7 @@ function renderVenues(): void {
     const pin = L.marker([v.lat, v.lng], {
       icon: L.divIcon({
         className: '',
-        html: `<div class="venue-pin${v.rating != null && v.rating >= 4.5 ? ' top-rated' : ''}" style="background:${heatColor(finalScore / maxScore)};border-color:${ring}">${venueEmoji(v)}${isFav ? '<span class="pin-fav">♥</span>' : ''}</div>`,
+        html: `<div class="venue-pin${v.rating != null && v.rating >= 4.5 ? ' top-rated' : ''}" style="background:${heatColor(finalScore / maxScore)};border-color:${ring}">${venueEmoji(v)}${v.vegan === 2 ? '<span class="pin-leaf">🌱</span>' : ''}${isFav ? '<span class="pin-fav">♥</span>' : ''}</div>`,
         iconSize: [26, 26],
         iconAnchor: [13, 13],
       }),

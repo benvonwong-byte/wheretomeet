@@ -28,6 +28,8 @@ export interface TransitGraph {
   /** Total node count (streets + platforms). */
   n: number;
   adj: Edge[][];
+  /** Every node's station index (street i → i; platform → its station). */
+  nodeStation: number[];
 }
 
 export function buildGraph(data: SubwayData, daypart: Daypart = 'midday'): TransitGraph {
@@ -36,12 +38,14 @@ export function buildGraph(data: SubwayData, daypart: Daypart = 'midday'): Trans
 
   // Assign platform node ids per (route, station).
   let n = S;
+  const nodeStation: number[] = Array.from({ length: S }, (_, i) => i);
   const platformId = new Map<string, number>();
   const platform = (routeIdx: number, station: number) => {
     const key = `${routeIdx}:${station}`;
     let id = platformId.get(key);
     if (id === undefined) {
       id = n++;
+      nodeStation.push(station);
       platformId.set(key, id);
     }
     return id;
@@ -93,7 +97,64 @@ export function buildGraph(data: SubwayData, daypart: Daypart = 'midday'): Trans
     }
   }
 
-  return { stations, n, adj };
+  return { stations, n, adj, nodeStation };
+}
+
+/**
+ * Reconstruct the transit route origin → dest as a coordinate chain
+ * (origin, each station traversed, dest). Falls back to a direct
+ * walk [origin, dest] when no train beats walking.
+ */
+export function transitPath(graph: TransitGraph, origin: Pt, dest: Pt): Pt[] {
+  const dist = new Float64Array(graph.n).fill(Infinity);
+  const parent = new Int32Array(graph.n).fill(-1);
+  const heap = new MinHeap();
+
+  for (let i = 0; i < graph.stations.length; i++) {
+    if (haversineKm(origin, graph.stations[i]) <= ACCESS_RADIUS_KM) {
+      const t = walkMin(origin, graph.stations[i]);
+      if (t < dist[i]) {
+        dist[i] = t;
+        parent[i] = -2; // seed marker: walked here from the origin
+        heap.push(i, t);
+      }
+    }
+  }
+
+  while (heap.size > 0) {
+    const [u, d] = heap.pop();
+    if (d > dist[u]) continue;
+    for (const e of graph.adj[u]) {
+      const nd = d + e.min;
+      if (nd < dist[e.to]) {
+        dist[e.to] = nd;
+        parent[e.to] = u;
+        heap.push(e.to, nd);
+      }
+    }
+  }
+
+  let bestTime = walkMin(origin, dest);
+  let bestNode = -1;
+  for (let i = 0; i < graph.stations.length; i++) {
+    if (!isFinite(dist[i])) continue;
+    if (haversineKm(graph.stations[i], dest) > EGRESS_RADIUS_KM) continue;
+    const t = dist[i] + walkMin(graph.stations[i], dest);
+    if (t < bestTime) {
+      bestTime = t;
+      bestNode = i;
+    }
+  }
+  if (bestNode < 0) return [origin, dest];
+
+  const stationChain: number[] = [];
+  for (let node = bestNode; node >= 0 || node === -2; node = parent[node]) {
+    if (node === -2) break;
+    const st = graph.nodeStation[node];
+    if (stationChain[0] !== st) stationChain.unshift(st);
+    if (parent[node] === -2) break;
+  }
+  return [origin, ...stationChain.map((s) => graph.stations[s]), dest];
 }
 
 /** Dijkstra from an origin point: minutes to each STREET node (walk-in included). */
