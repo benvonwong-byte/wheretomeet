@@ -58,6 +58,8 @@ const state = {
   teaHouse: true,
   bubbleTea: false,
   daypart: 'midday' as Daypart,
+  nameA: '',
+  nameB: '',
   tolerance: 15, // max acceptable minutes of deviation between the two travel times
   sortBy: 'best' as SortBy,
 };
@@ -68,6 +70,8 @@ if (shared.a) state.A.pt = shared.a;
 if (shared.b) state.B.pt = shared.b;
 if (shared.modesA) state.A.modes = new Set(shared.modesA);
 if (shared.modesB) state.B.modes = new Set(shared.modesB);
+if (shared.nameA) state.nameA = shared.nameA;
+if (shared.nameB) state.nameB = shared.nameB;
 if (shared.tolerance != null) state.tolerance = shared.tolerance;
 if (shared.daypart) state.daypart = shared.daypart;
 if (shared.favs?.length) seedFavs(state.A.pt, state.B.pt, shared.favs);
@@ -78,6 +82,8 @@ function syncUrl(): void {
     b: state.B.pt,
     labelA: (document.getElementById('addr-a') as HTMLInputElement).value || undefined,
     labelB: (document.getElementById('addr-b') as HTMLInputElement).value || undefined,
+    nameA: state.nameA || undefined,
+    nameB: state.nameB || undefined,
     modesA: [...state.A.modes],
     modesB: [...state.B.modes],
     tolerance: state.tolerance,
@@ -148,10 +154,13 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
 
 const venueLayer = L.layerGroup().addTo(map);
 
+const personLabel = (who: 'A' | 'B'): string => (who === 'A' ? state.nameA : state.nameB) || who;
+const personInitial = (who: 'A' | 'B'): string => personLabel(who).charAt(0).toUpperCase();
+
 function bulletIcon(who: 'A' | 'B'): L.DivIcon {
   return L.divIcon({
     className: '',
-    html: `<div class="marker-bullet ${who.toLowerCase()}">${who}</div>`,
+    html: `<div class="marker-bullet ${who.toLowerCase()}">${personInitial(who)}</div>`,
     iconSize: [30, 30],
     iconAnchor: [15, 15],
   });
@@ -196,6 +205,11 @@ function swapPersons(): void {
   const inA = document.getElementById('addr-a') as HTMLInputElement;
   const inB = document.getElementById('addr-b') as HTMLInputElement;
   [inA.value, inB.value] = [inB.value, inA.value];
+  [state.nameA, state.nameB] = [state.nameB, state.nameA];
+  const nA = document.getElementById('name-a') as HTMLInputElement;
+  const nB = document.getElementById('name-b') as HTMLInputElement;
+  [nA.value, nB.value] = [nB.value, nA.value];
+  applyNames();
   renderModes('A');
   renderModes('B');
   closeDetail();
@@ -219,6 +233,7 @@ function renderModes(who: 'A' | 'B'): void {
         set.add(m.id);
       }
       renderModes(who);
+      closeDetail(); // an open card would show combos for the OLD mode set
       scheduleRecompute();
     };
     el.appendChild(btn);
@@ -235,6 +250,12 @@ const SORTS: { id: SortBy; label: string }[] = [
   { id: 'a', label: 'BEST FOR A' },
   { id: 'b', label: 'BEST FOR B' },
 ];
+
+function sortLabel(s: { id: SortBy; label: string }): string {
+  if (s.id === 'a') return `BEST FOR ${personLabel('A').toUpperCase()}`;
+  if (s.id === 'b') return `BEST FOR ${personLabel('B').toUpperCase()}`;
+  return s.label;
+}
 
 type Combo = { modeA: Mode; modeB: Mode; tA: number; tB: number };
 
@@ -263,7 +284,7 @@ function renderSortChips(): void {
   for (const s of SORTS) {
     const chip = document.createElement('button');
     chip.className = 'chip' + (state.sortBy === s.id ? ' on' : '');
-    chip.textContent = s.label;
+    chip.textContent = sortLabel(s);
     chip.onclick = () => {
       if (state.sortBy === s.id) return;
       state.sortBy = s.id;
@@ -589,27 +610,30 @@ function metaLine(v: Venue): string {
 const routeLayer = L.layerGroup().addTo(map);
 let routeToken = 0;
 
-async function personRoute(who: 'A' | 'B', mode: Mode, v: Venue): Promise<Pt[]> {
+async function personRoute(who: 'A' | 'B', mode: Mode, v: Venue): Promise<{ path: Pt[]; routed: boolean }> {
   const origin = state[who].pt;
   const dest = { lat: v.lat, lng: v.lng };
-  if (mode === 'transit') return transitPath(getGraph(state.daypart), origin, dest);
-  return (await routedGeometry(origin, dest, mode)) ?? [origin, dest];
+  if (mode === 'transit') return { path: transitPath(getGraph(state.daypart), origin, dest), routed: true };
+  const geo = await routedGeometry(origin, dest, mode);
+  // No routing tier reachable → straight-line ESTIMATE, drawn visibly as one.
+  return geo ? { path: geo, routed: true } : { path: [origin, dest], routed: false };
 }
 
 async function drawRoutes(v: Venue, modeA: Mode, modeB: Mode): Promise<void> {
   const token = ++routeToken;
-  const [pathA, pathB] = await Promise.all([personRoute('A', modeA, v), personRoute('B', modeB, v)]);
+  const [ra, rb] = await Promise.all([personRoute('A', modeA, v), personRoute('B', modeB, v)]);
   if (token !== routeToken) return; // another venue selected meanwhile
   routeLayer.clearLayers();
-  const style = (color: string, mode: Mode) => ({
+  const style = (color: string, mode: Mode, routed: boolean) => ({
     color,
-    weight: 4,
-    opacity: 0.85,
-    dashArray: mode === 'transit' ? '2 8' : undefined, // transit = schematic station hops
+    weight: routed ? 4 : 3,
+    opacity: routed ? 0.85 : 0.45,
+    // transit = schematic station hops; unrouted street = rough estimate
+    dashArray: mode === 'transit' ? '2 8' : routed ? undefined : '10 10',
     lineCap: 'round' as const,
   });
-  const a = L.polyline(pathA, style('#4f8f00', modeA)).addTo(routeLayer);
-  const b = L.polyline(pathB, style('#7b2cbf', modeB)).addTo(routeLayer);
+  const a = L.polyline(ra.path, style('#4f8f00', modeA, ra.routed)).addTo(routeLayer);
+  const b = L.polyline(rb.path, style('#7b2cbf', modeB, rb.routed)).addTo(routeLayer);
   map.fitBounds(a.getBounds().extend(b.getBounds()), {
     paddingTopLeft: [40, 40],
     paddingBottomRight: [40, 220],
@@ -630,8 +654,8 @@ function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB
   const rows = combos
     .map(
       (c) =>
-        `<tr><td><span class="ca">A · ${MODE_LABEL[c.modeA]}</span></td><td>${Math.round(c.tA)}′</td>` +
-        `<td><span class="cb">B · ${MODE_LABEL[c.modeB]}</span></td><td>${Math.round(c.tB)}′</td>` +
+        `<tr><td><span class="ca">${esc(personLabel('A'))} · ${MODE_LABEL[c.modeA]}</span></td><td>${Math.round(c.tA)}′</td>` +
+        `<td><span class="cb">${esc(personLabel('B'))} · ${MODE_LABEL[c.modeB]}</span></td><td>${Math.round(c.tB)}′</td>` +
         `<td class="gap">Δ${Math.round(Math.abs(c.tA - c.tB))}′</td></tr>`,
     )
     .join('');
@@ -887,6 +911,28 @@ if (shared.labelB) (document.getElementById('addr-b') as HTMLInputElement).value
   slider.value = String(state.tolerance);
   document.getElementById('bias-val')!.textContent = state.tolerance === 0 ? 'EQUAL TIMES' : `±${state.tolerance}′`;
 }
+
+function applyNames(): void {
+  document.getElementById('bullet-a')!.textContent = personInitial('A');
+  document.getElementById('bullet-b')!.textContent = personInitial('B');
+  markers.A.setIcon(bulletIcon('A'));
+  markers.B.setIcon(bulletIcon('B'));
+  document.querySelector('.adv-labels .adv-a')!.textContent = `${personLabel('A')} sooner`;
+  document.querySelector('.adv-labels .adv-b')!.textContent = `${personLabel('B')} sooner`;
+  renderSortChips();
+}
+
+for (const who of ['A', 'B'] as const) {
+  const input = document.getElementById(`name-${who.toLowerCase()}`) as HTMLInputElement;
+  input.value = who === 'A' ? state.nameA : state.nameB;
+  input.addEventListener('input', () => {
+    if (who === 'A') state.nameA = input.value.trim().slice(0, 16);
+    else state.nameB = input.value.trim().slice(0, 16);
+    applyNames();
+    syncUrl();
+  });
+}
+applyNames();
 
 document.getElementById('swap-ab')!.onclick = swapPersons;
 

@@ -7,6 +7,8 @@ export interface ShareState {
   b?: Pt;
   labelA?: string;
   labelB?: string;
+  nameA?: string;
+  nameB?: string;
   modesA?: Mode[];
   modesB?: Mode[];
   tolerance?: number;
@@ -21,12 +23,16 @@ const CODE_DAY: Record<string, Daypart> = { r: 'rush', m: 'midday', e: 'evening'
 
 const pt = (p: Pt) => `${p.lat.toFixed(5)},${p.lng.toFixed(5)}`;
 
-export function encodeShare(s: Required<Omit<ShareState, 'labelA' | 'labelB' | 'favs'>> & ShareState): string {
+export function encodeShare(
+  s: Required<Omit<ShareState, 'labelA' | 'labelB' | 'nameA' | 'nameB' | 'favs'>> & ShareState,
+): string {
   const parts = [
     `a=${pt(s.a)}`,
     `b=${pt(s.b)}`,
     s.labelA ? `la=${encodeURIComponent(s.labelA)}` : '',
     s.labelB ? `lb=${encodeURIComponent(s.labelB)}` : '',
+    s.nameA ? `na=${encodeURIComponent(s.nameA)}` : '',
+    s.nameB ? `nb=${encodeURIComponent(s.nameB)}` : '',
     `am=${s.modesA.map((m) => MODE_CODE[m]).join('')}`,
     `bm=${s.modesB.map((m) => MODE_CODE[m]).join('')}`,
     `t=${s.tolerance}`,
@@ -59,6 +65,8 @@ export function parseShare(hash: string): ShareState {
   out.b = parsePt(q.get('b'));
   out.labelA = q.get('la') ?? undefined;
   out.labelB = q.get('lb') ?? undefined;
+  out.nameA = q.get('na')?.slice(0, 16).trim() || undefined;
+  out.nameB = q.get('nb')?.slice(0, 16).trim() || undefined;
   out.modesA = parseModes(q.get('am'));
   out.modesB = parseModes(q.get('bm'));
   const t = Number(q.get('t'));
