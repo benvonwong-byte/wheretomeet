@@ -926,8 +926,12 @@ if (shared.labelB) (document.getElementById('addr-b') as HTMLInputElement).value
 }
 
 function applyNames(): void {
-  document.getElementById('bullet-a')!.textContent = personInitial('A');
-  document.getElementById('bullet-b')!.textContent = personInitial('B');
+  const ba = document.getElementById('bullet-a')!;
+  const bb = document.getElementById('bullet-b')!;
+  ba.textContent = personInitial('A');
+  bb.textContent = personInitial('B');
+  ba.title = state.nameA ? `${state.nameA} — click to rename` : 'Click to add a name';
+  bb.title = state.nameB ? `${state.nameB} — click to rename` : 'Click to add a name';
   markers.A.setIcon(bulletIcon('A'));
   markers.B.setIcon(bulletIcon('B'));
   document.querySelector('.adv-labels .adv-a')!.textContent = `${personLabel('A')} sooner`;
@@ -938,7 +942,18 @@ function applyNames(): void {
 
 for (const who of ['A', 'B'] as const) {
   const input = document.getElementById(`name-${who.toLowerCase()}`) as HTMLInputElement;
+  const bullet = document.getElementById(`bullet-${who.toLowerCase()}`)!;
   input.value = who === 'A' ? state.nameA : state.nameB;
+  // Click the bullet to name the person; Enter/blur commits and restores it.
+  bullet.addEventListener('click', () => {
+    input.classList.add('editing');
+    input.focus();
+    input.select();
+  });
+  input.addEventListener('blur', () => input.classList.remove('editing'));
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === 'Escape') input.blur();
+  });
   input.addEventListener('input', () => {
     if (who === 'A') state.nameA = input.value.trim().slice(0, 16);
     else state.nameB = input.value.trim().slice(0, 16);

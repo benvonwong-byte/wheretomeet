@@ -1164,8 +1164,19 @@ body {
   display: none;
 }
 
-/* person name field */
+/* person name editor — hidden until the bullet is clicked */
+.person-head .bullet {
+  cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+
+.person-head .bullet:hover {
+  transform: scale(1.12);
+  box-shadow: 0 0 0 3px rgba(97, 166, 14, 0.25);
+}
+
 .pname {
+  display: none;
   width: 74px;
   flex: none;
   background: transparent;
@@ -1187,4 +1198,8 @@ body {
 .pname::placeholder {
   color: var(--dim);
   font-weight: 400;
+}
+
+.pname.editing {
+  display: block;
 }
