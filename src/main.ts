@@ -60,7 +60,7 @@ const state = {
   daypart: 'midday' as Daypart,
   nameA: '',
   nameB: '',
-  tolerance: 15, // max acceptable minutes of deviation between the two travel times
+  bias: 0, // minutes: negative = A gets the advantage, positive = B does
   sortBy: 'best' as SortBy,
 };
 
@@ -72,7 +72,7 @@ if (shared.modesA) state.A.modes = new Set(shared.modesA);
 if (shared.modesB) state.B.modes = new Set(shared.modesB);
 if (shared.nameA) state.nameA = shared.nameA;
 if (shared.nameB) state.nameB = shared.nameB;
-if (shared.tolerance != null) state.tolerance = shared.tolerance;
+if (shared.bias != null) state.bias = shared.bias;
 if (shared.daypart) state.daypart = shared.daypart;
 if (shared.favs?.length) seedFavs(state.A.pt, state.B.pt, shared.favs);
 
@@ -86,7 +86,7 @@ function syncUrl(): void {
     nameB: state.nameB || undefined,
     modesA: [...state.A.modes],
     modesB: [...state.B.modes],
-    tolerance: state.tolerance,
+    bias: state.bias,
     daypart: state.daypart,
     favs: [...loadFavs(state.A.pt, state.B.pt)],
   });
@@ -206,6 +206,8 @@ function swapPersons(): void {
   const inB = document.getElementById('addr-b') as HTMLInputElement;
   [inA.value, inB.value] = [inB.value, inA.value];
   [state.nameA, state.nameB] = [state.nameB, state.nameA];
+  state.bias = -state.bias;
+  (document.getElementById('bias') as HTMLInputElement).value = String(state.bias);
   const nA = document.getElementById('name-a') as HTMLInputElement;
   const nB = document.getElementById('name-b') as HTMLInputElement;
   [nA.value, nB.value] = [nB.value, nA.value];
@@ -272,7 +274,7 @@ function pickCombo(combos: Combo[], sortBy: SortBy): Combo {
       case 'b':
         return c.tB;
       default:
-        return -fairnessScore(c.tA, c.tB, state.tolerance); // lower = better
+        return -fairnessScore(c.tA, c.tB, state.bias); // lower = better
     }
   };
   return combos.reduce((p, c) => (metric(c) < metric(p) ? c : p));
@@ -320,12 +322,23 @@ function renderDayparts(): void {
   }
 }
 
-function wireTolerance(): void {
-  const slider = document.getElementById('bias') as HTMLInputElement;
+function updateBiasLabel(): void {
   const val = document.getElementById('bias-val')!;
+  val.textContent =
+    state.bias === 0
+      ? 'FAIR'
+      : state.bias < 0
+        ? `${personLabel('A')} saves ${-state.bias}′`
+        : `${personLabel('B')} saves ${state.bias}′`;
+  document.getElementById('bias-left')!.textContent = `← ${personLabel('A')} advantage`;
+  document.getElementById('bias-right')!.textContent = `${personLabel('B')} advantage →`;
+}
+
+function wireBias(): void {
+  const slider = document.getElementById('bias') as HTMLInputElement;
   slider.addEventListener('input', () => {
-    state.tolerance = +slider.value;
-    val.textContent = state.tolerance === 0 ? 'EQUAL TIMES' : `±${state.tolerance}′`;
+    state.bias = +slider.value;
+    updateBiasLabel();
     scheduleRecompute();
   });
 }
@@ -529,7 +542,7 @@ function recompute(venuesOnly: boolean): void {
   renderLayers();
   if (!venuesOnly || lastLayers.length === 0) {
     const combos = activeCombos().filter((c) => c.on);
-    lastLayers = combos.map((c) => comboLayer(c.a, c.b, getField('A', c.a), getField('B', c.b), state.tolerance));
+    lastLayers = combos.map((c) => comboLayer(c.a, c.b, getField('A', c.a), getField('B', c.b), state.bias));
   }
   renderVenues(); // heat follows the venue list (drawn at the end of renderVenues)
   setStatus('Ready', 900);
@@ -554,7 +567,7 @@ function drawContours(): void {
     gap[i] = minA[i] - minB[i];
   }
 
-  const url = renderHeat(gap, shownVenueCells, GRID).toDataURL();
+  const url = renderHeat(gap, shownVenueCells, GRID, state.bias).toDataURL();
   if (heatOverlay) heatOverlay.setUrl(url);
   else {
     heatOverlay = L.imageOverlay(url, HEAT_BOUNDS, {
@@ -773,7 +786,7 @@ function renderVenues(): void {
 
   const enriched = candidates.map(({ v, s }) => {
     const eff = effectiveCombos(v, s.combos);
-    const finalScore = eff.combos.reduce((m, c) => Math.max(m, fairnessScore(c.tA, c.tB, state.tolerance)), 0);
+    const finalScore = eff.combos.reduce((m, c) => Math.max(m, fairnessScore(c.tA, c.tB, state.bias)), 0);
     const best = pickCombo(eff.combos, state.sortBy);
     const shownTotal = best.tA + best.tB;
     return { v, s, eff, finalScore, best, shownTotal };
@@ -896,7 +909,7 @@ function renderShortlist(favs: Set<string>): void {
 renderModes('A');
 renderModes('B');
 renderDayparts();
-wireTolerance();
+wireBias();
 renderCatFilters();
 renderDietFilters();
 renderSortChips();
@@ -908,8 +921,8 @@ if (shared.labelA) (document.getElementById('addr-a') as HTMLInputElement).value
 if (shared.labelB) (document.getElementById('addr-b') as HTMLInputElement).value = shared.labelB;
 {
   const slider = document.getElementById('bias') as HTMLInputElement;
-  slider.value = String(state.tolerance);
-  document.getElementById('bias-val')!.textContent = state.tolerance === 0 ? 'EQUAL TIMES' : `±${state.tolerance}′`;
+  slider.value = String(state.bias);
+  updateBiasLabel();
 }
 
 function applyNames(): void {
@@ -919,6 +932,7 @@ function applyNames(): void {
   markers.B.setIcon(bulletIcon('B'));
   document.querySelector('.adv-labels .adv-a')!.textContent = `${personLabel('A')} sooner`;
   document.querySelector('.adv-labels .adv-b')!.textContent = `${personLabel('B')} sooner`;
+  updateBiasLabel();
   renderSortChips();
 }
 

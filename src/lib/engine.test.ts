@@ -154,22 +154,24 @@ describe('transit graph', () => {
   });
 });
 
-describe('deviation tolerance dial', () => {
-  it('strict tolerance kills uneven spots that loose tolerance allows for free', () => {
-    // 10/25: 15-min gap. Heavily damped under ±0, costs NOTHING under ±30.
-    expect(fairnessScore(10, 25, 0)).toBeLessThan(0.02);
-    expect(fairnessScore(10, 25, 30)).toBeCloseTo(fairnessScore(17.5, 17.5, 30), 6);
+describe('advantage bias dial', () => {
+  it('bias shifts the fair point toward one person', () => {
+    // A travels 10, B travels 25: ideal under "A saves 15" — better than
+    // under FAIR, and far better than the mirrored spot favoring B.
+    expect(fairnessScore(10, 25, -15)).toBeGreaterThan(fairnessScore(10, 25, 0));
+    expect(fairnessScore(10, 25, -15)).toBeGreaterThan(fairnessScore(25, 10, -15));
   });
 
-  it('loose tolerance lets a fast-uneven spot beat a slow-even one; strict flips it', () => {
-    const fastUneven: [number, number] = [8, 28]; // total 36, gap 20
-    const slowEven: [number, number] = [24, 25]; // total 49, gap 1
-    expect(fairnessScore(...fastUneven, 30)).toBeGreaterThan(fairnessScore(...slowEven, 30));
-    expect(fairnessScore(...fastUneven, 5)).toBeLessThan(fairnessScore(...slowEven, 5));
+  it('recommendations skew with the dial: A-favoring spot wins at negative bias', () => {
+    const favorsA: [number, number] = [10, 28]; // total 38
+    const favorsB: [number, number] = [28, 10]; // total 38
+    expect(fairnessScore(...favorsA, -20)).toBeGreaterThan(fairnessScore(...favorsB, -20));
+    expect(fairnessScore(...favorsB, 20)).toBeGreaterThan(fairnessScore(...favorsA, 20));
   });
 
-  it('symmetry between the two people', () => {
-    expect(fairnessScore(12, 30, 15)).toBeCloseTo(fairnessScore(30, 12, 15), 6);
+  it('FAIR (0) keeps symmetry, small gaps cost nothing', () => {
+    expect(fairnessScore(12, 30, 0)).toBeCloseTo(fairnessScore(30, 12, 0), 6);
+    expect(fairnessScore(10, 16, 0)).toBeCloseTo(fairnessScore(13, 13, 0), 6); // gap 6 within allowance
   });
 });
 
@@ -315,7 +317,7 @@ describe('share links', () => {
       labelB: 'Flushing, Queens',
       modesA: ['transit', 'bike'],
       modesB: ['car'],
-      tolerance: 10,
+      bias: 10,
       daypart: 'evening',
       favs: ['n123', 'w456'],
     });
@@ -325,7 +327,7 @@ describe('share links', () => {
     expect(s.labelA).toBe('245 Varet Street, Brooklyn');
     expect(s.modesA).toEqual(['transit', 'bike']);
     expect(s.modesB).toEqual(['car']);
-    expect(s.tolerance).toBe(10);
+    expect(s.bias).toBe(10);
     expect(s.daypart).toBe('evening');
     expect(s.favs).toEqual(['n123', 'w456']);
   });
@@ -335,7 +337,7 @@ describe('share links', () => {
     expect(s.a).toBeUndefined();
     expect(s.modesA).toBeUndefined();
     expect(s.favs).toEqual([]);
-    expect(s.tolerance).toBeUndefined();
+    expect(s.bias).toBeUndefined();
   });
 
   it('empty hash → empty state', () => {

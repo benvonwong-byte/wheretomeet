@@ -22,7 +22,7 @@ const SIGMA_CELLS = 2.4; // ~650m blob softness
 const WINDOW = 8; // cells painted around each venue
 const MAX_ALPHA = 225;
 
-export function renderHeat(gap: TimeField, venueCells: number[], grid: GridSpec): HTMLCanvasElement {
+export function renderHeat(gap: TimeField, venueCells: number[], grid: GridSpec, bias = 0): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = grid.cols;
   canvas.height = grid.rows;
@@ -49,7 +49,7 @@ export function renderHeat(gap: TimeField, venueCells: number[], grid: GridSpec)
       const i = r * grid.cols + c;
       if (!isFinite(gap[i]) || weight[i] < 0.12) continue;
       const o = ((grid.rows - 1 - r) * grid.cols + c) * 4; // grid row 0 is south
-      const [cr, cg, cb] = advantageColor(gap[i]);
+      const [cr, cg, cb] = advantageColor(gap[i] - bias); // yellow sits on the shifted fair point
       img.data[o] = cr;
       img.data[o + 1] = cg;
       img.data[o + 2] = cb;

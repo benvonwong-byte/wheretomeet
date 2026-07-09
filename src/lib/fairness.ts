@@ -8,17 +8,18 @@ import { transitField, type TransitGraph } from './transit';
 // cell is "minimum combined travel among fair-ish spots" and the score
 // radiates outward as combined time grows.
 const TOTAL_TIME_SCALE = 45; // combined minutes per e-fold of decay
-const EXCESS_SOFTNESS = 8; // minutes; how quickly score dies past the allowed deviation
+const EVEN_ALLOWANCE = 8; // minutes around the fair point that cost nothing
+const EXCESS_SOFTNESS = 8; // minutes; how quickly score dies past the allowance
 
 /**
- * `tolerance` = allowed deviation between the two travel times, in minutes
- * (the dial: 0 = times must match, 30 = up to half an hour apart is fine).
- * A budget, not a scale: gaps within tolerance cost NOTHING; only the excess
- * beyond it is penalized, dying off over ~EXCESS_SOFTNESS minutes.
+ * `bias` shifts WHERE "even" sits, in minutes: negative = person A deserves
+ * the advantage (ideal spots have tA ≈ tB + bias, i.e. A travels less);
+ * positive favors B; 0 = classic fair split. Gaps within ±EVEN_ALLOWANCE of
+ * the shifted fair point cost nothing; only the excess is penalized.
  */
-export function fairnessScore(tA: number, tB: number, tolerance = 15): number {
+export function fairnessScore(tA: number, tB: number, bias = 0): number {
   if (!isFinite(tA) || !isFinite(tB)) return 0;
-  const excess = Math.max(0, Math.abs(tA - tB) - tolerance);
+  const excess = Math.max(0, Math.abs(tA - tB - bias) - EVEN_ALLOWANCE);
   const total = tA + tB;
   return Math.exp(-total / TOTAL_TIME_SCALE) * Math.exp(-((excess / EXCESS_SOFTNESS) ** 2));
 }
@@ -34,10 +35,10 @@ export function timeField(graph: TransitGraph, origin: Pt, mode: Mode, grid: Gri
   return field;
 }
 
-export function comboLayer(modeA: Mode, modeB: Mode, timesA: TimeField, timesB: TimeField, tolerance = 15): ComboLayer {
+export function comboLayer(modeA: Mode, modeB: Mode, timesA: TimeField, timesB: TimeField, bias = 0): ComboLayer {
   const scores = new Float32Array(timesA.length);
   for (let i = 0; i < scores.length; i++) {
-    scores[i] = fairnessScore(timesA[i], timesB[i], tolerance);
+    scores[i] = fairnessScore(timesA[i], timesB[i], bias);
   }
   return { modeA, modeB, scores, timesA, timesB };
 }

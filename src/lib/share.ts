@@ -11,7 +11,7 @@ export interface ShareState {
   nameB?: string;
   modesA?: Mode[];
   modesB?: Mode[];
-  tolerance?: number;
+  bias?: number;
   daypart?: Daypart;
   favs?: string[];
 }
@@ -35,7 +35,7 @@ export function encodeShare(
     s.nameB ? `nb=${encodeURIComponent(s.nameB)}` : '',
     `am=${s.modesA.map((m) => MODE_CODE[m]).join('')}`,
     `bm=${s.modesB.map((m) => MODE_CODE[m]).join('')}`,
-    `t=${s.tolerance}`,
+    `t=${s.bias}`,
     `d=${DAY_CODE[s.daypart]}`,
     s.favs && s.favs.length ? `f=${s.favs.join('.')}` : '',
   ];
@@ -70,7 +70,7 @@ export function parseShare(hash: string): ShareState {
   out.modesA = parseModes(q.get('am'));
   out.modesB = parseModes(q.get('bm'));
   const t = Number(q.get('t'));
-  if (isFinite(t) && t >= 0 && t <= 30) out.tolerance = Math.round(t / 5) * 5;
+  if (isFinite(t) && t >= -20 && t <= 20) out.bias = Math.round(t / 5) * 5;
   const d = q.get('d');
   if (d && CODE_DAY[d]) out.daypart = CODE_DAY[d];
   const f = q.get('f');
