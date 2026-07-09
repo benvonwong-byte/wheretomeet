@@ -1,5 +1,5 @@
 import { haversineKm } from './geo';
-import type { Pt } from './types';
+import type { Pt, Daypart } from './types';
 
 // Best-guess NYC calibration. Speeds in km/h, overheads in minutes.
 // Detour factor converts straight-line to street-network distance.
@@ -29,4 +29,20 @@ export function directTimeMin(a: Pt, b: Pt, mode: keyof typeof MODE_PARAMS): num
 
 export function walkMin(a: Pt, b: Pt): number {
   return directTimeMin(a, b, 'walk');
+}
+
+// NYC car traffic by time of day: rush crawls, night flies. Scales only the
+// driving portion — parking overhead is constant.
+export const CAR_DAYPART_FACTOR: Record<Daypart, number> = {
+  rush: 1.35,
+  midday: 1,
+  evening: 1.1,
+  night: 0.75,
+};
+
+/** Apply the daypart traffic factor to a car duration (minutes incl. overhead). */
+export function carDaypartMin(baseMin: number, daypart: Daypart): number {
+  if (!isFinite(baseMin)) return baseMin;
+  const overhead = MODE_PARAMS.car.overhead;
+  return overhead + Math.max(0, baseMin - overhead) * CAR_DAYPART_FACTOR[daypart];
 }

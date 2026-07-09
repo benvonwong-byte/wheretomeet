@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { haversineKm, NYC_GRID, cellCenter, pointToCell, cellIndex } from './geo';
-import { directTimeMin, walkMin } from './modes';
+import { directTimeMin, walkMin, carDaypartMin } from './modes';
 import { buildGraph, stationTimes, transitField, transitPath } from './transit';
 import { fairnessScore, comboLayer, maxLayers, minPersonField, timeField, scoreAtPoint } from './fairness';
 import { filterVenues } from './venues';
@@ -151,6 +151,17 @@ describe('transit graph', () => {
     // Cell near S2 (4.4km away): train should beat the ~70min walk
     const nearS2 = pointToCell(grid, { lat: 40.74, lng: -74.0 });
     expect(field[nearS2]).toBeLessThan(walkMin(origin, { lat: 40.74, lng: -74.0 }));
+  });
+});
+
+describe('car daypart traffic', () => {
+  it('rush hour slower than midday, night faster; parking overhead constant', () => {
+    const base = 37; // minutes incl. 7' overhead
+    expect(carDaypartMin(base, 'rush')).toBeGreaterThan(carDaypartMin(base, 'midday'));
+    expect(carDaypartMin(base, 'night')).toBeLessThan(carDaypartMin(base, 'midday'));
+    expect(carDaypartMin(base, 'midday')).toBe(base);
+    expect(carDaypartMin(7, 'rush')).toBe(7); // zero driving = overhead only
+    expect(carDaypartMin(Infinity, 'rush')).toBe(Infinity);
   });
 });
 
@@ -375,6 +386,13 @@ describe('venue filter', () => {
   it('tea house and bubble tea are disjoint classes', () => {
     expect(filterVenues(venues, { categories: all, ...off, teaHouse: true }).map((v) => v.id)).toEqual(['c']);
     expect(filterVenues(venues, { categories: all, ...off, bubbleTea: true }).map((v) => v.id)).toEqual(['f']);
+  });
+
+  it('emoji filter narrows by venue-type glyph through the same pipeline', () => {
+    const withEmoji = { categories: all, ...off, emoji: new Set(['🍵']) };
+    expect(filterVenues(venues, withEmoji).map((v) => v.id)).toEqual(['c']);
+    const empty = { categories: all, ...off, emoji: new Set<string>() };
+    expect(filterVenues(venues, empty)).toHaveLength(6); // empty set = no emoji narrowing
   });
 
   it('vegan classes OR tea classes: union', () => {

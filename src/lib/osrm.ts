@@ -131,31 +131,90 @@ export async function routedField(origin: Pt, mode: Mode, grid: GridSpec, step =
   return field;
 }
 
+// Google Routes API — the reliable tier: works on the deployed site (the key
+// is referrer-locked to it), needs no local servers, free 10k routes/month.
+const ROUTES_KEY = import.meta.env.VITE_ROUTES_KEY as string | undefined;
+const G_TRAVEL: Partial<Record<Mode, string>> = { car: 'DRIVE', bike: 'BICYCLE', walk: 'WALK' };
+
+async function googleRoutesGeometry(origin: Pt, dest: Pt, mode: Mode, signal?: AbortSignal): Promise<Pt[] | null> {
+  const travelMode = G_TRAVEL[mode];
+  if (!ROUTES_KEY || !travelMode) return null;
+  const res = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+    method: 'POST',
+    signal,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': ROUTES_KEY,
+      'X-Goog-FieldMask': 'routes.polyline.geoJsonLinestring',
+    },
+    body: JSON.stringify({
+      origin: { location: { latLng: { latitude: origin.lat, longitude: origin.lng } } },
+      destination: { location: { latLng: { latitude: dest.lat, longitude: dest.lng } } },
+      travelMode,
+      polylineEncoding: 'GEO_JSON_LINESTRING',
+    }),
+  });
+  if (!res.ok) return null;
+  const json = (await res.json()) as { routes?: { polyline?: { geoJsonLinestring?: { coordinates: [number, number][] } } }[] };
+  const coords = json.routes?.[0]?.polyline?.geoJsonLinestring?.coordinates;
+  return coords?.length ? coords.map(([lng, lat]) => ({ lat, lng })) : null;
+}
+
+// Promise-cached so concurrent calls for the same leg share one fetch
+// (protects the Google Routes quota); true LRU via delete+re-set on hit.
+const geoCache = new Map<string, Promise<Pt[] | null>>();
+const GEO_CACHE_MAX = 150;
+
 /**
  * Street route geometry origin → dest for drawing on the map.
- * Local OSRM first, public OSRM fallback. Null → caller draws a straight line.
+ * Tiers: local OSRM → Google Routes → public OSRM. Null → straight estimate.
  */
 export async function routedGeometry(origin: Pt, dest: Pt, mode: Mode, signal?: AbortSignal): Promise<Pt[] | null> {
+  // 5 decimals ≈ 1m — 4 (~11m) collided for venues in the same building.
+  const cacheKey = `${mode}:${origin.lat.toFixed(5)},${origin.lng.toFixed(5)}:${dest.lat.toFixed(5)},${dest.lng.toFixed(5)}`;
+  const hit = geoCache.get(cacheKey);
+  if (hit) {
+    geoCache.delete(cacheKey);
+    geoCache.set(cacheKey, hit);
+    return hit;
+  }
+
   const q =
     `/route/v1/driving/${origin.lng.toFixed(6)},${origin.lat.toFixed(6)};` +
     `${dest.lng.toFixed(6)},${dest.lat.toFixed(6)}?overview=full&geometries=geojson`;
-  const bases: string[] = [];
+
+  const osrmTier = async (base: string): Promise<Pt[] | null> => {
+    const res = await fetch(base + q, { signal });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { code: string; routes?: { geometry: { coordinates: [number, number][] } }[] };
+    const coords = json.routes?.[0]?.geometry?.coordinates;
+    return json.code === 'Ok' && coords?.length ? coords.map(([lng, lat]) => ({ lat, lng })) : null;
+  };
+
   const local = LOCAL_PATH[mode];
-  if (local) bases.push(local);
   const profile = PROFILE[mode];
-  if (profile) bases.push(`https://routing.openstreetmap.de/${profile}`);
-  for (const base of bases) {
-    try {
-      const res = await fetch(base + q, { signal });
-      if (!res.ok) continue;
-      const json = (await res.json()) as { code: string; routes?: { geometry: { coordinates: [number, number][] } }[] };
-      const coords = json.routes?.[0]?.geometry?.coordinates;
-      if (json.code === 'Ok' && coords?.length) return coords.map(([lng, lat]) => ({ lat, lng }));
-    } catch {
-      /* next tier */
+  const tiers: (() => Promise<Pt[] | null>)[] = [];
+  if (local) tiers.push(() => osrmTier(local));
+  tiers.push(() => googleRoutesGeometry(origin, dest, mode, signal));
+  if (profile) tiers.push(() => osrmTier(`https://routing.openstreetmap.de/${profile}`));
+
+  const attempt = (async () => {
+    for (const tier of tiers) {
+      try {
+        const path = await tier();
+        if (path) return path;
+      } catch {
+        /* next tier */
+      }
     }
-  }
-  return null;
+    return null;
+  })();
+
+  geoCache.set(cacheKey, attempt);
+  if (geoCache.size > GEO_CACHE_MAX) geoCache.delete(geoCache.keys().next().value!);
+  const path = await attempt;
+  if (!path) geoCache.delete(cacheKey); // don't pin failures
+  return path;
 }
 
 /**

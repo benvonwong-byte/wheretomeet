@@ -3,6 +3,7 @@ import './style.css';
 import venuesData from './data/venues.json';
 import subwayData from './data/subway.json';
 import { NYC_GRID, pointToCell } from './lib/geo';
+import { carDaypartMin } from './lib/modes';
 import { buildGraph, transitPath, type TransitGraph } from './lib/transit';
 import { timeField, comboLayer, minPersonField, scoreAtPoint, fairnessScore } from './lib/fairness';
 import { maskField } from './lib/contours';
@@ -49,9 +50,9 @@ interface Person {
 }
 
 const state = {
-  A: { pt: { lat: 40.7143, lng: -73.9614 }, modes: new Set<Mode>(['transit', 'bike']) } as Person,
-  B: { pt: { lat: 40.787, lng: -73.9754 }, modes: new Set<Mode>(['transit', 'car']) } as Person,
-  layerOff: new Set<string>(), // combo keys the user toggled off
+  A: { pt: { lat: 40.7143, lng: -73.9614 }, modes: new Set<Mode>(['transit']) } as Person,
+  B: { pt: { lat: 40.787, lng: -73.9754 }, modes: new Set<Mode>(['transit']) } as Person,
+  emojiFilter: new Set<string>(),
   cats: new Set<Venue['cat']>(['restaurant', 'cafe', 'activity']),
   veganOnly: false,
   veganFriendly: true,
@@ -68,8 +69,11 @@ const state = {
 const shared = parseShare(location.hash);
 if (shared.a) state.A.pt = shared.a;
 if (shared.b) state.B.pt = shared.b;
-if (shared.modesA) state.A.modes = new Set(shared.modesA);
-if (shared.modesB) state.B.modes = new Set(shared.modesB);
+// One mode per person now; old multi-mode links collapse by a fixed priority
+// (MODES order), not the sharer's arbitrary toggle order.
+const pickMode = (ms: Mode[]): Mode => MODES.find((m) => ms.includes(m.id))?.id ?? ms[0];
+if (shared.modesA?.length) state.A.modes = new Set([pickMode(shared.modesA)]);
+if (shared.modesB?.length) state.B.modes = new Set([pickMode(shared.modesB)]);
 if (shared.nameA) state.nameA = shared.nameA;
 if (shared.nameB) state.nameB = shared.nameB;
 if (shared.bias != null) state.bias = shared.bias;
@@ -98,11 +102,12 @@ const fieldCache = new Map<string, TimeField>();
 const fieldUpgrades = new Map<string, 'pending' | 'done'>();
 
 function getField(who: 'A' | 'B', mode: Mode): TimeField {
-  // Transit fields depend on the daypart (headway-based waits).
-  const key = mode === 'transit' ? `${who}:transit:${state.daypart}` : `${who}:${mode}`;
+  // Transit (headway waits) and car (traffic) depend on the daypart.
+  const key = mode === 'transit' || mode === 'car' ? `${who}:${mode}:${state.daypart}` : `${who}:${mode}`;
   let f = fieldCache.get(key);
   if (!f) {
     f = timeField(getGraph(state.daypart), state[who].pt, mode, GRID);
+    if (mode === 'car') for (let i = 0; i < f.length; i++) f[i] = carDaypartMin(f[i], state.daypart);
     fieldCache.set(key, f);
   }
   if (mode !== 'transit' && !fieldUpgrades.has(key)) upgradeField(who, mode, key);
@@ -112,12 +117,14 @@ function getField(who: 'A' | 'B', mode: Mode): TimeField {
 function upgradeField(who: 'A' | 'B', mode: Mode, key: string): void {
   fieldUpgrades.set(key, 'pending');
   const pt = state[who].pt;
+  const daypart = state.daypart;
   void routedField(pt, mode, GRID).then((f) => {
     if (state[who].pt !== pt) return; // pin moved while routing — stale
     if (!f) {
       fieldUpgrades.delete(key); // local server unreachable; retry on next recompute
       return;
     }
+    if (mode === 'car') for (let i = 0; i < f.length; i++) f[i] = carDaypartMin(f[i], daypart);
     fieldCache.set(key, f);
     fieldUpgrades.set(key, 'done');
     scheduleRecompute();
@@ -129,16 +136,13 @@ function clearPersonFields(who: 'A' | 'B'): void {
   for (const key of [...fieldUpgrades.keys()]) if (key.startsWith(`${who}:`)) fieldUpgrades.delete(key);
 }
 
-const comboKey = (a: Mode, b: Mode) => `${a}|${b}`;
-
-function activeCombos(): { a: Mode; b: Mode; key: string; on: boolean }[] {
-  const out: { a: Mode; b: Mode; key: string; on: boolean }[] = [];
+function activeCombos(): { a: Mode; b: Mode }[] {
+  const out: { a: Mode; b: Mode }[] = [];
   for (const m of MODES) {
     if (!state.A.modes.has(m.id)) continue;
     for (const n of MODES) {
       if (!state.B.modes.has(n.id)) continue;
-      const key = comboKey(m.id, n.id);
-      out.push({ a: m.id, b: n.id, key, on: !state.layerOff.has(key) });
+      out.push({ a: m.id, b: n.id });
     }
   }
   return out;
@@ -227,15 +231,10 @@ function renderModes(who: 'A' | 'B'): void {
     btn.className = 'mode-pill' + (state[who].modes.has(m.id) ? ' on' : '');
     btn.textContent = m.label;
     btn.onclick = () => {
-      const set = state[who].modes;
-      if (set.has(m.id)) {
-        if (set.size === 1) return; // keep at least one mode
-        set.delete(m.id);
-      } else {
-        set.add(m.id);
-      }
+      if (state[who].modes.has(m.id)) return;
+      state[who].modes = new Set([m.id]);
       renderModes(who);
-      closeDetail(); // an open card would show combos for the OLD mode set
+      closeDetail(); // an open card would show combos for the OLD mode
       scheduleRecompute();
     };
     el.appendChild(btn);
@@ -315,7 +314,12 @@ function renderDayparts(): void {
     chip.onclick = () => {
       if (state.daypart === d.id) return;
       state.daypart = d.id;
+      // Refined car times are daypart-scaled — force a re-fetch at the new hour.
+      for (const who of ['A', 'B'] as const) {
+        for (const k of [...exactCache[who].keys()]) if (k.startsWith('car:')) exactCache[who].delete(k);
+      }
       renderDayparts();
+      closeDetail();
       scheduleRecompute();
     };
     el.appendChild(chip);
@@ -341,27 +345,6 @@ function wireBias(): void {
     updateBiasLabel();
     scheduleRecompute();
   });
-}
-
-// ── UI: layer legend ─────────────────────────────────────────
-function renderLayers(): void {
-  const el = document.getElementById('layers')!;
-  el.innerHTML = '';
-  for (const c of activeCombos()) {
-    const row = document.createElement('div');
-    row.className = 'layer-row' + (c.on ? '' : ' off');
-    row.innerHTML =
-      `<span class="sw"></span>` +
-      `<span class="bullet bullet-a mini">A</span><span class="lbl">${MODE_LABEL[c.a]}</span>` +
-      `<span class="lbl">×</span>` +
-      `<span class="bullet bullet-b mini">B</span><span class="lbl">${MODE_LABEL[c.b]}</span>`;
-    row.onclick = () => {
-      if (state.layerOff.has(c.key)) state.layerOff.delete(c.key);
-      else state.layerOff.add(c.key);
-      scheduleRecompute();
-    };
-    el.appendChild(row);
-  }
 }
 
 // ── UI: filters ──────────────────────────────────────────────
@@ -529,19 +512,24 @@ function setStatus(msg: string, autoHide = 0): void {
 
 // ── Recompute pipeline ───────────────────────────────────────
 let pending = 0;
+let pendingVenuesOnly = true;
 
 function scheduleRecompute(venuesOnly = false): void {
+  pendingVenuesOnly = pendingVenuesOnly && venuesOnly; // a full request never downgrades
   window.clearTimeout(pending);
   setStatus('Computing fair zones…');
-  pending = window.setTimeout(() => recompute(venuesOnly), 30);
+  pending = window.setTimeout(() => {
+    const vo = pendingVenuesOnly;
+    pendingVenuesOnly = true;
+    recompute(vo);
+  }, 30);
 }
 
 let lastLayers: ComboLayer[] = [];
 
 function recompute(venuesOnly: boolean): void {
-  renderLayers();
   if (!venuesOnly || lastLayers.length === 0) {
-    const combos = activeCombos().filter((c) => c.on);
+    const combos = activeCombos();
     lastLayers = combos.map((c) => comboLayer(c.a, c.b, getField('A', c.a), getField('B', c.b), state.bias));
   }
   renderVenues(); // heat follows the venue list (drawn at the end of renderVenues)
@@ -749,10 +737,14 @@ async function refineVenues(venues: Venue[]): Promise<void> {
       if (mode === 'transit') continue; // GTFS engine is the authority there
       const missing = venues.filter((v) => !exactCache[who].has(`${mode}:${v.id}`));
       if (!missing.length) continue;
+      const daypart = state.daypart;
       jobs.push(
         routedMinutes(state[who].pt, missing, mode).then((mins) => {
           if (!mins) return;
-          missing.forEach((v, i) => exactCache[who].set(`${mode}:${v.id}`, mins[i]));
+          missing.forEach((v, i) => {
+            const t = mins[i];
+            exactCache[who].set(`${mode}:${v.id}`, mode === 'car' && t != null ? carDaypartMin(t, daypart) : t);
+          });
         }),
       );
     }
@@ -768,13 +760,30 @@ function renderVenues(): void {
   const headEl = document.getElementById('venues-head')!;
   listEl.innerHTML = '';
 
-  const filtered = filterVenues(VENUES, {
+  // Legend counts come from the pre-emoji filter pass so options stay visible.
+  const preEmoji = filterVenues(VENUES, {
     categories: state.cats,
     veganOnly: state.veganOnly,
     veganFriendly: state.veganFriendly,
     teaHouse: state.teaHouse,
     bubbleTea: state.bubbleTea,
   });
+  const emojiCounts = new Map<string, number>();
+  for (const v of preEmoji) {
+    const e = venueEmoji(v);
+    emojiCounts.set(e, (emojiCounts.get(e) ?? 0) + 1);
+  }
+  renderEmojiLegend(emojiCounts);
+  const filtered = state.emojiFilter.size
+    ? filterVenues(VENUES, {
+        categories: state.cats,
+        veganOnly: state.veganOnly,
+        veganFriendly: state.veganFriendly,
+        teaHouse: state.teaHouse,
+        bubbleTea: state.bubbleTea,
+        emoji: state.emojiFilter,
+      })
+    : preEmoji;
 
   // Shortlist by model score with margin, then rank by the SAME times the rows
   // display (street-routed where available) so rank and readout never disagree.
@@ -818,9 +827,14 @@ function renderVenues(): void {
   headEl.textContent = `Best spots · ${scored.length}`;
 
   if (!scored.length) {
-    listEl.innerHTML = '<li class="empty">No venues in the fair zone — widen filters or move a pin.</li>';
+    const hint = state.emojiFilter.size
+      ? 'clear the emoji filter on the map, widen filters, or move a pin'
+      : 'widen filters or move a pin';
+    listEl.innerHTML = `<li class="empty">No venues in the fair zone — ${hint}.</li>`;
     shownVenueCells = [];
     drawContours();
+    renderShortlist(loadFavs(state.A.pt, state.B.pt));
+    syncUrl();
     return;
   }
 
@@ -871,6 +885,31 @@ function renderVenues(): void {
   drawContours();
   renderShortlist(favs);
   syncUrl();
+}
+
+
+// ── Emoji legend (map side) — tap to filter by venue type ────
+function renderEmojiLegend(counts: Map<string, number>): void {
+  const el = document.getElementById('emoji-legend')!;
+  el.innerHTML = '';
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12);
+  for (const e of state.emojiFilter) {
+    if (!top.some(([emoji]) => emoji === e)) top.push([e, counts.get(e) ?? 0]);
+  }
+  el.hidden = top.length < 2 && state.emojiFilter.size === 0;
+  if (el.hidden) return;
+  for (const [emoji, n] of top) {
+    const btn = document.createElement('button');
+    btn.className = 'em' + (state.emojiFilter.has(emoji) ? ' on' : '');
+    btn.textContent = emoji;
+    btn.title = `${n} spots — tap to filter`;
+    btn.onclick = () => {
+      if (state.emojiFilter.has(emoji)) state.emojiFilter.delete(emoji);
+      else state.emojiFilter.add(emoji);
+      scheduleRecompute(true);
+    };
+    el.appendChild(btn);
+  }
 }
 
 // ── Shortlist panel (the shareable picks list) ───────────────

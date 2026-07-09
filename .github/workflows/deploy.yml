@@ -25,9 +25,17 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - name: Check Routes key present
+        env:
+          ROUTES_WEB_KEY: ${{ secrets.ROUTES_WEB_KEY }}
+        run: |
+          if [ -z "$ROUTES_WEB_KEY" ]; then
+            echo "::warning::ROUTES_WEB_KEY secret is empty — Google Routes geometry tier will be disabled in this build"
+          fi
       - run: npm run build
         env:
           PAGES_BASE: /wheretomeet/
+          VITE_ROUTES_KEY: ${{ secrets.ROUTES_WEB_KEY }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
