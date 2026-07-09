@@ -7,6 +7,7 @@ import { filterVenues } from './venues';
 import { advantageColor } from './heat';
 import { venueEmoji } from './emoji';
 import { pairKey } from './favs';
+import { contourAt, contourLevels, buildContours } from './contours';
 import type { SubwayData, Venue } from './types';
 
 describe('geo', () => {
@@ -219,19 +220,65 @@ describe('fairness', () => {
 });
 
 describe('advantage color', () => {
-  it('diverges: A turf violet, seam thermal orange, B turf crimson — and clamps', () => {
-    expect(advantageColor(-25)).toEqual([124, 77, 255]); // full A violet
-    expect(advantageColor(-60)).toEqual([124, 77, 255]); // clamped
-    expect(advantageColor(0)).toEqual([251, 141, 52]); // thermal orange seam
-    expect(advantageColor(25)).toEqual([230, 72, 79]); // full B crimson
-    expect(advantageColor(60)).toEqual([230, 72, 79]); // clamped
+  it('diverges: A turf violet, balanced orange, B turf crimson — and clamps', () => {
+    expect(advantageColor(-25)).toEqual([109, 63, 212]); // full A violet
+    expect(advantageColor(-60)).toEqual([109, 63, 212]); // clamped
+    expect(advantageColor(0)).toEqual([224, 134, 44]); // balanced orange
+    expect(advantageColor(25)).toEqual([214, 60, 68]); // full B crimson
+    expect(advantageColor(60)).toEqual([214, 60, 68]); // clamped
   });
 
   it('interpolates smoothly between poles', () => {
     const [r, g, b] = advantageColor(-12.5); // halfway A-violet → orange
-    expect(r).toBeCloseTo((124 + 251) / 2, 0);
-    expect(g).toBeCloseTo((77 + 141) / 2, 0);
-    expect(b).toBeCloseTo((255 + 52) / 2, 0);
+    expect(r).toBeCloseTo((109 + 224) / 2, 0);
+    expect(g).toBeCloseTo((63 + 134) / 2, 0);
+    expect(b).toBeCloseTo((212 + 44) / 2, 0);
+  });
+});
+
+describe('isochrone contours', () => {
+  // Radial field: total time grows with distance from grid center.
+  const cgrid = { latMin: 40.6, latMax: 40.8, lngMin: -74.1, lngMax: -73.9, rows: 40, cols: 40 };
+  const cells = cgrid.rows * cgrid.cols;
+  const center = { lat: 40.7, lng: -74.0 };
+  const total = new Float32Array(cells);
+  const gap = new Float32Array(cells);
+  for (let r = 0; r < cgrid.rows; r++) {
+    for (let c = 0; c < cgrid.cols; c++) {
+      const p = cellCenter(cgrid, r, c);
+      total[r * cgrid.cols + c] = 20 + haversineKm(center, p) * 6;
+      gap[r * cgrid.cols + c] = p.lng < -74.0 ? -20 : 20; // west = A turf, east = B turf
+    }
+  }
+
+  it('extracts a ring whose crossings sit at the level value', () => {
+    const batches = contourAt(total, gap, cgrid, 50);
+    const segs = batches.flatMap((b) => b.segments);
+    expect(segs.length).toBeGreaterThan(10);
+    // every segment endpoint should be ~50 total minutes in the source field
+    for (const [p] of segs.slice(0, 20)) {
+      const t = 20 + haversineKm(center, p) * 6;
+      expect(Math.abs(t - 50)).toBeLessThan(2.5);
+    }
+  });
+
+  it('splits the ring into advantage-colored batches (violet + crimson present)', () => {
+    const batches = contourAt(total, gap, cgrid, 50);
+    expect(batches.length).toBeGreaterThanOrEqual(2);
+    const colors = batches.map((b) => b.color);
+    expect(colors).toContain('rgb(125,73,188)'); // violet-leaning (A turf, gap -20 bucket)
+    expect(colors).toContain('rgb(215,71,65)'); // crimson-leaning (B turf, gap +20 bucket)
+  });
+
+  it('levels start just outside the optimum and step outward', () => {
+    const levels = contourLevels(31);
+    expect(levels[0]).toBeGreaterThan(31);
+    for (let i = 1; i < levels.length; i++) expect(levels[i]).toBeGreaterThan(levels[i - 1]);
+  });
+
+  it('empty on all-unreachable fields', () => {
+    const inf = new Float32Array(cells).fill(Infinity);
+    expect(buildContours(inf, inf, cgrid)).toEqual([]);
   });
 });
 

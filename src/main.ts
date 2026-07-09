@@ -4,8 +4,8 @@ import venuesData from './data/venues.json';
 import subwayData from './data/subway.json';
 import { NYC_GRID } from './lib/geo';
 import { buildGraph, transitPath, type TransitGraph } from './lib/transit';
-import { timeField, comboLayer, maxLayers, minPersonField, scoreAtPoint, fairnessScore } from './lib/fairness';
-import { renderHeat } from './lib/heat';
+import { timeField, comboLayer, minPersonField, scoreAtPoint, fairnessScore } from './lib/fairness';
+import { buildContours } from './lib/contours';
 import { filterVenues } from './lib/venues';
 import { geocode, makeSuggester, type GeoHit } from './lib/geocode';
 import { routedMinutes, routedField, routedGeometry } from './lib/osrm';
@@ -112,13 +112,12 @@ function activeCombos(): { a: Mode; b: Mode; key: string; on: boolean }[] {
 // ── Map ──────────────────────────────────────────────────────
 const map = L.map('map', { zoomControl: false }).setView([40.745, -73.96], 12);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
   attribution: '© OpenStreetMap contributors © CARTO',
   maxZoom: 19,
 }).addTo(map);
 
-const HEAT_BOUNDS = L.latLngBounds([GRID.latMin, GRID.lngMin], [GRID.latMax, GRID.lngMax]);
-let heatOverlay: L.ImageOverlay | null = null;
+const contourLayer = L.layerGroup().addTo(map);
 const venueLayer = L.layerGroup().addTo(map);
 
 function bulletIcon(who: 'A' | 'B'): L.DivIcon {
@@ -434,20 +433,53 @@ function recompute(venuesOnly: boolean): void {
   if (!venuesOnly || lastLayers.length === 0) {
     const combos = activeCombos().filter((c) => c.on);
     lastLayers = combos.map((c) => comboLayer(c.a, c.b, getField('A', c.a), getField('B', c.b), state.tolerance));
-    const agg = maxLayers(lastLayers, CELLS);
-    const canvas = renderHeat(agg, minPersonField(lastLayers, 'A', CELLS), minPersonField(lastLayers, 'B', CELLS), GRID);
-    const url = canvas.toDataURL();
-    if (heatOverlay) heatOverlay.setUrl(url);
-    else {
-      heatOverlay = L.imageOverlay(url, HEAT_BOUNDS, {
-        opacity: 0.85,
-        className: 'heat-img',
-        interactive: false,
-      }).addTo(map);
-    }
+    drawContours();
   }
   renderVenues();
   setStatus('Ready', 900);
+}
+
+// ── Isochrone contour rings ──────────────────────────────────
+// Rings = combined travel time (labeled, minutes); the color along each
+// ring = who reaches that stretch sooner (violet A ↔ orange even ↔ crimson B).
+function drawContours(): void {
+  contourLayer.clearLayers();
+  if (lastLayers.length === 0) return;
+  const minA = minPersonField(lastLayers, 'A', CELLS);
+  const minB = minPersonField(lastLayers, 'B', CELLS);
+  const total = new Float32Array(CELLS);
+  const gap = new Float32Array(CELLS);
+  for (let i = 0; i < CELLS; i++) {
+    total[i] = minA[i] + minB[i];
+    gap[i] = minA[i] - minB[i];
+  }
+
+  const sets = buildContours(total, gap, GRID);
+  const n = sets.length;
+  for (const set of sets) {
+    const f = 1 - set.rank / Math.max(n - 1, 1); // 1 = innermost
+    const weight = 1.2 + 2.3 * f;
+    const opacity = 0.3 + 0.55 * f;
+    for (const batch of set.batches) {
+      L.polyline(batch.segments as unknown as L.LatLngExpression[][], {
+        color: batch.color,
+        weight,
+        opacity,
+        interactive: false,
+        lineCap: 'round',
+      }).addTo(contourLayer);
+    }
+    // Minute labels on the three inner rings.
+    if (set.rank < 3) {
+      const seg = set.batches[0]?.segments[Math.floor((set.batches[0]?.segments.length ?? 0) / 2)];
+      if (seg) {
+        L.marker([(seg[0].lat + seg[1].lat) / 2, (seg[0].lng + seg[1].lng) / 2], {
+          icon: L.divIcon({ className: '', html: `<div class="ring-label">${Math.round(set.level)}′</div>`, iconSize: [40, 16], iconAnchor: [20, 8] }),
+          interactive: false,
+        }).addTo(contourLayer);
+      }
+    }
+  }
 }
 
 // ── Venues ───────────────────────────────────────────────────
@@ -514,8 +546,8 @@ async function drawRoutes(v: Venue, modeA: Mode, modeB: Mode): Promise<void> {
     dashArray: mode === 'transit' ? '2 8' : undefined, // transit = schematic station hops
     lineCap: 'round' as const,
   });
-  const a = L.polyline(pathA, style('#4f63d2', modeA)).addTo(routeLayer);
-  const b = L.polyline(pathB, style('#d2604a', modeB)).addTo(routeLayer);
+  const a = L.polyline(pathA, style('#6d3fd4', modeA)).addTo(routeLayer);
+  const b = L.polyline(pathB, style('#d63c44', modeB)).addTo(routeLayer);
   map.fitBounds(a.getBounds().extend(b.getBounds()), {
     paddingTopLeft: [40, 40],
     paddingBottomRight: [40, 220],
@@ -573,12 +605,12 @@ function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB
   };
 }
 
-// Thermal ramp for venue dot fills: dim violet → orange → white-yellow.
+// Warm ramp for venue dot fills on the light map: sand → orange → crimson.
 function heatColor(t: number): string {
-  if (t > 0.8) return '#fcffa4';
-  if (t > 0.6) return '#fb8d34';
-  if (t > 0.4) return '#d95f69';
-  return '#7c6f9c';
+  if (t > 0.8) return '#d63c44';
+  if (t > 0.6) return '#e07b2a';
+  if (t > 0.4) return '#dbb13b';
+  return '#b3ac96';
 }
 
 // ── Exact street routing (OSRM) ──────────────────────────────
