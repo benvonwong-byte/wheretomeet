@@ -747,13 +747,21 @@ function renderVenues(): void {
     .sort((a, b) => b.s.score - a.s.score)
     .slice(0, 60);
 
-  const scored = candidates
-    .map(({ v, s }) => {
-      const eff = effectiveCombos(v, s.combos);
-      const finalScore = eff.combos.reduce((m, c) => Math.max(m, fairnessScore(c.tA, c.tB, state.tolerance)), 0);
-      const best = pickCombo(eff.combos, state.sortBy);
-      return { v, s, eff, finalScore, best };
-    })
+  const enriched = candidates.map(({ v, s }) => {
+    const eff = effectiveCombos(v, s.combos);
+    const finalScore = eff.combos.reduce((m, c) => Math.max(m, fairnessScore(c.tA, c.tB, state.tolerance)), 0);
+    const best = pickCombo(eff.combos, state.sortBy);
+    const shownTotal = best.tA + best.tB;
+    return { v, s, eff, finalScore, best, shownTotal };
+  });
+
+  // Viability gate: a spot must SAVE BOTH PEOPLE TIME. Anything more than
+  // 15 combined minutes past the best reachable venue is out, no matter how
+  // perfectly equal the split is — equality ranks within the time-savers.
+  // Gated on the same combo the row displays, so what you see always passes.
+  const minVenueTotal = enriched.reduce((m, x) => Math.min(m, x.shownTotal), Infinity);
+  const scored = enriched
+    .filter((x) => x.shownTotal <= minVenueTotal + 15)
     .sort((x, y) => {
       switch (state.sortBy) {
         case 'total':
