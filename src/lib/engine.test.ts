@@ -7,7 +7,7 @@ import { filterVenues } from './venues';
 import { advantageColor } from './heat';
 import { venueEmoji } from './emoji';
 import { pairKey } from './favs';
-import { contourAt, contourLevels, buildContours } from './contours';
+import { contourSegments, personRings } from './contours';
 import { encodeShare, parseShare } from './share';
 import type { SubwayData, Venue } from './types';
 
@@ -253,34 +253,30 @@ describe('isochrone contours', () => {
   }
 
   it('extracts a ring whose crossings sit at the level value', () => {
-    const batches = contourAt(total, gap, cgrid, 50);
-    const segs = batches.flatMap((b) => b.segments);
+    const segs = contourSegments(total, cgrid, 50);
     expect(segs.length).toBeGreaterThan(10);
-    // every segment endpoint should be ~50 total minutes in the source field
+    // every segment endpoint should be ~50 minutes in the source field
     for (const [p] of segs.slice(0, 20)) {
       const t = 20 + haversineKm(center, p) * 6;
       expect(Math.abs(t - 50)).toBeLessThan(2.5);
     }
   });
 
-  it('splits the ring into advantage-colored batches (violet + crimson present)', () => {
-    const batches = contourAt(total, gap, cgrid, 50);
-    expect(batches.length).toBeGreaterThanOrEqual(2);
-    const colors = batches.map((b) => b.color);
-    expect(colors).toContain('rgb(125,73,188)'); // violet-leaning (A turf, gap -20 bucket)
-    expect(colors).toContain('rgb(215,71,65)'); // crimson-leaning (B turf, gap +20 bucket)
-  });
-
-  it('levels are 5-minute increments starting just past the optimum', () => {
-    const levels = contourLevels(31);
-    expect(levels[0]).toBe(35);
-    for (const l of levels) expect(l % 5).toBe(0);
-    for (let i = 1; i < levels.length; i++) expect(levels[i] - levels[i - 1]).toBe(5);
+  it('personRings: 1-minute levels, index rings every 5, fade grows outward', () => {
+    const rings = personRings(total, cgrid);
+    expect(rings.length).toBeGreaterThan(10);
+    for (let i = 1; i < rings.length; i++) {
+      expect(rings[i].level - rings[i - 1].level).toBe(1);
+      expect(rings[i].fade).toBeGreaterThan(rings[i - 1].fade);
+    }
+    for (const r of rings) expect(r.index).toBe(r.level % 5 === 0);
+    // innermost ring sits just past the field minimum (~20-22 at the center cell)
+    expect(rings[0].level).toBeLessThanOrEqual(24);
   });
 
   it('empty on all-unreachable fields', () => {
     const inf = new Float32Array(cells).fill(Infinity);
-    expect(buildContours(inf, inf, cgrid)).toEqual([]);
+    expect(personRings(inf, cgrid)).toEqual([]);
   });
 });
 

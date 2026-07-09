@@ -5,7 +5,7 @@ import subwayData from './data/subway.json';
 import { NYC_GRID } from './lib/geo';
 import { buildGraph, transitPath, type TransitGraph } from './lib/transit';
 import { timeField, comboLayer, minPersonField, scoreAtPoint, fairnessScore } from './lib/fairness';
-import { buildContours } from './lib/contours';
+import { personRings } from './lib/contours';
 import { renderGlow } from './lib/heat';
 import { filterVenues } from './lib/venues';
 import { geocode, makeSuggester, type GeoHit } from './lib/geocode';
@@ -467,14 +467,38 @@ function recompute(venuesOnly: boolean): void {
   setStatus('Ready', 900);
 }
 
-// ── Radial glow + 5-minute rings ─────────────────────────────
-// A warm bloom marks the optimum (hue leans toward whoever is closer);
-// concentric rings step outward in 5-minute increments of combined time,
-// vivid at the core and cooling/fading with distance.
+// ── Dual ripples: 1-minute rings from each person ────────────
+// Violet rings radiate from A, crimson from B, hairlines every minute with
+// bold index rings every 5 — two ripple systems whose collision zone is the
+// meeting ground, marked by the warm glow.
 const GLOW_BOUNDS = L.latLngBounds([GRID.latMin, GRID.lngMin], [GRID.latMax, GRID.lngMax]);
 let glowOverlay: L.ImageOverlay | null = null;
 
-const RING_COLORS = ['#e0403a', '#e8652e', '#eb9035', '#daa74d', '#c2a76d', '#a89f85', '#93948e', '#7f8b96'];
+function drawRingFamily(field: TimeField, color: string): void {
+  for (const ring of personRings(field, GRID)) {
+    const dim = 1 - 0.55 * ring.fade; // fade with distance from the person
+    L.polyline(ring.segments as unknown as L.LatLngExpression[][], {
+      color,
+      weight: ring.index ? 1.7 : 0.6,
+      opacity: (ring.index ? 0.55 : 0.18) * dim,
+      interactive: false,
+      lineCap: 'round',
+    }).addTo(contourLayer);
+    // Minute labels on the first few index rings.
+    if (ring.index && ring.level % 10 === 0 && ring.fade < 0.6) {
+      const seg = ring.segments[Math.floor(ring.segments.length / 2)];
+      L.marker([(seg[0].lat + seg[1].lat) / 2, (seg[0].lng + seg[1].lng) / 2], {
+        icon: L.divIcon({
+          className: '',
+          html: `<div class="ring-label" style="color:${color}">${ring.level}′</div>`,
+          iconSize: [40, 16],
+          iconAnchor: [20, 8],
+        }),
+        interactive: false,
+      }).addTo(contourLayer);
+    }
+  }
+}
 
 function drawContours(): void {
   contourLayer.clearLayers();
@@ -488,6 +512,7 @@ function drawContours(): void {
     gap[i] = minA[i] - minB[i];
   }
 
+  // Warm bloom over the best meeting zone.
   const url = renderGlow(total, gap, GRID).toDataURL();
   if (glowOverlay) glowOverlay.setUrl(url);
   else {
@@ -498,45 +523,8 @@ function drawContours(): void {
     }).addTo(map);
   }
 
-  const sets = buildContours(total, gap, GRID);
-  const n = sets.length;
-  for (const set of sets) {
-    const f = 1 - set.rank / Math.max(n - 1, 1); // 1 = innermost
-    const color = RING_COLORS[Math.min(set.rank, RING_COLORS.length - 1)];
-    const segments = set.batches.flatMap((b) => b.segments) as unknown as L.LatLngExpression[][];
-    if (!segments.length) continue;
-    // halo pass (the glow around each ring), then crisp core
-    L.polyline(segments, {
-      color,
-      weight: 7 + 4 * f,
-      opacity: 0.07 + 0.1 * f,
-      interactive: false,
-      lineCap: 'round',
-    }).addTo(contourLayer);
-    L.polyline(segments, {
-      color,
-      weight: 1.1 + 1.7 * f,
-      opacity: 0.35 + 0.55 * f,
-      interactive: false,
-      lineCap: 'round',
-    }).addTo(contourLayer);
-    // Minute labels on the four inner rings.
-    if (set.rank < 4) {
-      const all = set.batches.flatMap((b) => b.segments);
-      const seg = all[Math.floor(all.length / 2)];
-      if (seg) {
-        L.marker([(seg[0].lat + seg[1].lat) / 2, (seg[0].lng + seg[1].lng) / 2], {
-          icon: L.divIcon({
-            className: '',
-            html: `<div class="ring-label" style="color:${color}">${Math.round(set.level)}′</div>`,
-            iconSize: [40, 16],
-            iconAnchor: [20, 8],
-          }),
-          interactive: false,
-        }).addTo(contourLayer);
-      }
-    }
-  }
+  drawRingFamily(minA, '#6d3fd4'); // A: violet ripples
+  drawRingFamily(minB, '#d63c44'); // B: crimson ripples
 }
 
 // ── Venues ───────────────────────────────────────────────────

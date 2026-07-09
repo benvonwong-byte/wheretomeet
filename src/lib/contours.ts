@@ -1,33 +1,12 @@
 import { cellCenter } from './geo';
-import { advantageColor } from './heat';
 import type { GridSpec, Pt, TimeField } from './types';
 
-// Isochrone contour extraction: lines of equal COMBINED travel time, with
-// each stretch colored by who reaches it sooner (the "gradient line").
-export interface ContourSet {
-  /** Minutes of combined travel this ring represents. */
-  level: number;
-  /** 0 = innermost ring. */
-  rank: number;
-  /** Segment batches grouped by advantage hue: color + disjoint segments. */
-  batches: { color: string; segments: [Pt, Pt][] }[];
-}
+// Marching-squares isochrone extraction: lines of equal travel time.
 
-const GAP_BUCKETS = 7; // advantage quantization along the lines
-const BUCKET_SPAN = 50; // minutes of gap covered edge-to-edge (-25..+25)
-
-/**
- * Marching squares over `total` at `level`, tagging each segment with the
- * local A/B gap so callers can draw advantage-colored contour lines.
- */
-export function contourAt(
-  total: TimeField,
-  gap: TimeField,
-  grid: GridSpec,
-  level: number,
-): { color: string; segments: [Pt, Pt][] }[] {
-  const buckets: [Pt, Pt][][] = Array.from({ length: GAP_BUCKETS }, () => []);
-  const val = (r: number, c: number) => total[r * grid.cols + c];
+/** All segments where `field` crosses `level` (minutes). */
+export function contourSegments(field: TimeField, grid: GridSpec, level: number): [Pt, Pt][] {
+  const out: [Pt, Pt][] = [];
+  const val = (r: number, c: number) => field[r * grid.cols + c];
 
   // Interpolated crossing point between two corners.
   const cross = (r0: number, c0: number, r1: number, c1: number): Pt => {
@@ -60,71 +39,71 @@ export function contourAt(
       const bottom = () => cross(r, c, r, c + 1);
       const left = () => cross(r + 1, c, r, c);
 
-      const segs: [Pt, Pt][] = [];
       switch (idx) {
         case 1:
         case 14:
-          segs.push([left(), bottom()]);
+          out.push([left(), bottom()]);
           break;
         case 2:
         case 13:
-          segs.push([bottom(), right()]);
+          out.push([bottom(), right()]);
           break;
         case 3:
         case 12:
-          segs.push([left(), right()]);
+          out.push([left(), right()]);
           break;
         case 4:
         case 11:
-          segs.push([top(), right()]);
+          out.push([top(), right()]);
           break;
         case 5:
-          segs.push([left(), top()], [bottom(), right()]);
+          out.push([left(), top()], [bottom(), right()]);
           break;
         case 6:
         case 9:
-          segs.push([top(), bottom()]);
+          out.push([top(), bottom()]);
           break;
         case 7:
         case 8:
-          segs.push([left(), top()]);
+          out.push([left(), top()]);
           break;
         case 10:
-          segs.push([top(), right()], [left(), bottom()]);
+          out.push([top(), right()], [left(), bottom()]);
           break;
       }
-
-      const g = gap[r * grid.cols + c];
-      const bucket = Math.max(
-        0,
-        Math.min(GAP_BUCKETS - 1, Math.floor(((g + BUCKET_SPAN / 2) / BUCKET_SPAN) * GAP_BUCKETS)),
-      );
-      for (const s of segs) buckets[bucket].push(s);
     }
   }
-
-  return buckets
-    .map((segments, i) => {
-      const midGap = ((i + 0.5) / GAP_BUCKETS) * BUCKET_SPAN - BUCKET_SPAN / 2;
-      const [cr, cg, cb] = advantageColor(midGap);
-      return { color: `rgb(${Math.round(cr)},${Math.round(cg)},${Math.round(cb)})`, segments };
-    })
-    .filter((b) => b.segments.length > 0);
+  return out;
 }
 
-/** Ring levels: 5-minute increments radiating out from the optimum. */
-export function contourLevels(minTotal: number): number[] {
-  const base = Math.ceil((minTotal + 2) / 5) * 5; // first 5-min mark past the optimum
-  return Array.from({ length: 8 }, (_, i) => base + i * 5);
+export interface RingFamily {
+  /** Absolute minutes from this person's door. */
+  level: number;
+  /** Bold index ring (every 5 minutes) vs 1-minute hairline. */
+  index: boolean;
+  /** 0 at the person's fastest reachable cell → 1 at the range edge. */
+  fade: number;
+  segments: [Pt, Pt][];
 }
 
-export function buildContours(total: TimeField, gap: TimeField, grid: GridSpec): ContourSet[] {
-  let minTotal = Infinity;
-  for (let i = 0; i < total.length; i++) if (total[i] < minTotal) minTotal = total[i];
-  if (!isFinite(minTotal)) return [];
-  return contourLevels(minTotal).map((level, rank) => ({
-    level,
-    rank,
-    batches: contourAt(total, gap, grid, level),
-  }));
+const RING_RANGE_MIN = 40; // how far out (minutes) each person's ripples extend
+
+/** 1-minute isochrone rings radiating from one person's travel-time field. */
+export function personRings(field: TimeField, grid: GridSpec): RingFamily[] {
+  let minT = Infinity;
+  for (let i = 0; i < field.length; i++) if (field[i] < minT) minT = field[i];
+  if (!isFinite(minT)) return [];
+  const start = Math.ceil(minT + 0.5);
+  const rings: RingFamily[] = [];
+  for (let level = start; level <= minT + RING_RANGE_MIN; level++) {
+    const segments = contourSegments(field, grid, level);
+    if (!segments.length) continue;
+    rings.push({
+      level,
+      index: level % 5 === 0,
+      fade: (level - minT) / RING_RANGE_MIN,
+      segments,
+    });
+  }
+  return rings;
 }
