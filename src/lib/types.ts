@@ -13,6 +13,7 @@ export interface Venue {
   cat: 'restaurant' | 'cafe' | 'activity';
   vegan: 0 | 1 | 2; // 0 none, 1 vegan-friendly, 2 fully vegan
   tea: 0 | 1 | 2; // 0 none, 1 proper tea house, 2 bubble tea
+  gf?: 0 | 1 | 2; // gluten-free: 1 has GF options, 2 fully GF (sparse — only set when >0)
   cuisine: string;
   addr: string;
   // Enrichment (present when known)

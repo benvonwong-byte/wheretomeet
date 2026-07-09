@@ -72,6 +72,7 @@ function slim(el, key) {
     cat: baseCategory(key, t),
     vegan: veganLevel(t),
     tea: teaKind(t, t.name),
+    ...(t['diet:gluten_free'] === 'only' ? { gf: 2 } : t['diet:gluten_free'] === 'yes' ? { gf: 1 } : {}),
     cuisine: t.cuisine ?? '',
     addr,
   };

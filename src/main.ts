@@ -58,6 +58,7 @@ const state = {
   veganFriendly: true,
   teaHouse: true,
   bubbleTea: false,
+  glutenFree: false,
   daypart: 'midday' as Daypart,
   nameA: '',
   nameB: '',
@@ -379,6 +380,7 @@ function renderDietFilters(): void {
     { key: 'veganOnly' as const, label: '🌱 FULLY VEGAN', cls: 'vegan' },
     { key: 'teaHouse' as const, label: '🍵 TEA HOUSE', cls: 'tea' },
     { key: 'bubbleTea' as const, label: '🧋 BUBBLE TEA', cls: 'boba' },
+    { key: 'glutenFree' as const, label: '🌾 GLUTEN-FREE', cls: 'gf' },
   ];
   for (const d of defs) {
     const chip = document.createElement('button');
@@ -578,6 +580,8 @@ function venueTags(v: Venue): string {
   else if (v.vegan === 1) tags.push('<span class="tag vegan1">🌿 vegan-friendly</span>');
   if (v.tea === 1) tags.push('<span class="tag tea">🍵 tea house</span>');
   else if (v.tea === 2) tags.push('<span class="tag boba">🧋 bubble tea</span>');
+  if (v.gf === 2) tags.push('<span class="tag gf">🌾 100% gluten-free</span>');
+  else if (v.gf === 1) tags.push('<span class="tag gf">🌾 GF options</span>');
   tags.push(`<span class="tag">${v.cat}</span>`);
   return tags.join('');
 }
@@ -633,13 +637,9 @@ async function drawRoutes(v: Venue, modeA: Mode, modeB: Mode): Promise<void> {
     dashArray: mode === 'transit' ? '2 8' : routed ? undefined : '10 10',
     lineCap: 'round' as const,
   });
-  const a = L.polyline(ra.path, style('#4f8f00', modeA, ra.routed)).addTo(routeLayer);
-  const b = L.polyline(rb.path, style('#7b2cbf', modeB, rb.routed)).addTo(routeLayer);
-  map.fitBounds(a.getBounds().extend(b.getBounds()), {
-    paddingTopLeft: [40, 40],
-    paddingBottomRight: [40, 220],
-    maxZoom: 14,
-  });
+  // Keep the user's viewport — auto-fitting to the route yanked the zoom out.
+  L.polyline(ra.path, style('#4f8f00', modeA, ra.routed)).addTo(routeLayer);
+  L.polyline(rb.path, style('#7b2cbf', modeB, rb.routed)).addTo(routeLayer);
 }
 
 // ── Detail panel ─────────────────────────────────────────────
@@ -767,6 +767,7 @@ function renderVenues(): void {
     veganFriendly: state.veganFriendly,
     teaHouse: state.teaHouse,
     bubbleTea: state.bubbleTea,
+    glutenFree: state.glutenFree,
   });
   const emojiCounts = new Map<string, number>();
   for (const v of preEmoji) {
@@ -781,6 +782,7 @@ function renderVenues(): void {
         veganFriendly: state.veganFriendly,
         teaHouse: state.teaHouse,
         bubbleTea: state.bubbleTea,
+        glutenFree: state.glutenFree,
         emoji: state.emojiFilter,
       })
     : preEmoji;
@@ -943,6 +945,28 @@ function renderShortlist(favs: Set<string>): void {
     list.appendChild(li);
   }
 }
+
+// ── Intro / about ────────────────────────────────────────────
+const introEl = document.getElementById('intro')!;
+const INTRO_SEEN = 'w2m:intro';
+
+function hideIntro(): void {
+  introEl.hidden = true;
+  localStorage.setItem(INTRO_SEEN, '1');
+}
+document.getElementById('about-btn')!.onclick = () => {
+  introEl.hidden = false;
+};
+document.getElementById('intro-x')!.onclick = hideIntro;
+document.getElementById('intro-go')!.onclick = hideIntro;
+introEl.onclick = (e) => {
+  if (e.target === introEl) hideIntro();
+};
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !introEl.hidden) hideIntro();
+});
+// First visit only — and never over a shared plan someone sent you.
+if (!localStorage.getItem(INTRO_SEEN) && !shared.a && !shared.b) introEl.hidden = false;
 
 // ── Boot ─────────────────────────────────────────────────────
 renderModes('A');

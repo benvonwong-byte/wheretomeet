@@ -7,12 +7,14 @@ export interface VenueFilter {
   veganFriendly: boolean; // vegan-friendly class (level 1 exactly — has options, not all-vegan)
   teaHouse: boolean; // proper tea (tea === 1)
   bubbleTea: boolean; // boba (tea === 2) — not the same thing
+  glutenFree: boolean; // GF within the vegan universe: gf > 0 AND vegan > 0 — never bare GF places
   emoji?: Set<string>; // venue-type glyphs from the map legend; empty/absent = all
 }
 
 export function filterVenues(venues: Venue[], f: VenueFilter): Venue[] {
   return venues.filter((v) => {
     if (!f.categories.has(v.cat)) return false;
+    if (f.glutenFree && !(v.gf && v.vegan > 0)) return false;
     if (f.emoji?.size && !f.emoji.has(venueEmoji(v))) return false;
     // Spotlight filters are additive: if any is on, the venue must match one.
     // Fully-vegan/vegan-friendly and tea-house/bubble-tea are DISJOINT classes.

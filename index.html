@@ -86,6 +86,7 @@
           </div>
           <h1>Thyme <em>&amp;</em> Place</h1>
           <p class="tagline">Vegan meetups, halfway &amp; on thyme · NYC</p>
+          <button id="about-btn" class="about-btn" title="What is this &amp; how do I use it?">?</button>
         </header>
 
         <section class="person" data-person="A">
@@ -159,6 +160,41 @@
         <button id="share-link">🔗 Copy share link</button>
         <p class="shortlist-hint">Send it — your friend opens the same pins, settings &amp; picks.</p>
       </aside>
+    </div>
+    <div id="intro" class="intro" hidden>
+      <div class="intro-card" role="dialog" aria-modal="true" aria-label="About Thyme &amp; Place">
+        <button class="intro-x" id="intro-x" aria-label="Close">×</button>
+        <p class="intro-hello">HI, FRIEND · WELCOME TO</p>
+        <h1 class="intro-wordmark">Thyme <em>&amp;</em> Place</h1>
+        <p class="intro-lede">
+          Two NYC addresses in — <b>fair, vegan-friendly places to meet</b> out.
+          Every spot is ranked by real travel time for <i>both</i> of you, so nobody schleps an hour while the other strolls five minutes.
+        </p>
+        <ol class="intro-steps">
+          <li>
+            <span class="step-mark"><span class="bullet bullet-a">A</span><span class="bullet bullet-b">B</span></span>
+            <div><b>Drop two pins.</b> Type each person's address — or tap the A / B bullets to give them names. The ⇅ button swaps them.</div>
+          </li>
+          <li>
+            <span class="step-mark step-ic">🚇</span>
+            <div><b>Pick your rides &amp; hour.</b> Subway, bike, car or walk — each person picks one. Subway times follow real MTA schedules; car times know rush hour from 11pm.</div>
+          </li>
+          <li>
+            <span class="step-mark step-ic">🌱</span>
+            <div><b>Meet on thyme.</b> The glow is your fair zone — tap any spot for live routes, Google ratings &amp; prices. Tap ♥ on favorites, then copy the share link and send it.</div>
+          </li>
+        </ol>
+        <div class="intro-heat">
+          <div class="intro-heat-bar"></div>
+          <div class="intro-heat-labels"><span class="adv-a">A gets there sooner</span><span>even</span><span class="adv-b">B gets there sooner</span></div>
+        </div>
+        <p class="intro-feats">
+          🌱 fully vegan · 🌿 vegan-friendly · 🌾 gluten-free (within vegan spots) · 🍵 tea houses · 🧋 bubble tea ·
+          🎳 activities · ⚖️ advantage dial for when someone owes someone
+        </p>
+        <button id="intro-go" class="intro-go">Find your spot →</button>
+        <p class="intro-fine">Free &amp; no signup · Data © OpenStreetMap · Ratings by Google · Times are honest estimates, not gospel</p>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
