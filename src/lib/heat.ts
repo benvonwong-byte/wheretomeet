@@ -1,27 +1,27 @@
 import type { GridSpec, TimeField } from './types';
 
-// Thyme & Place advantage scale — culinary earth tones, no default-AI violet:
-// juniper teal = A reaches this ground sooner, paprika = B does, saffron = even.
-const A_RGB: [number, number, number] = [14, 124, 116]; // juniper teal — person A
-const B_RGB: [number, number, number] = [192, 90, 53]; // paprika — person B
-const MID_RGB: [number, number, number] = [217, 154, 43]; // saffron — balanced
+// HappyCow-inspired advantage scale — maximally opposed hues:
+// leafy green = A gets there sooner, star yellow = even, cow purple = B sooner.
+const A_RGB: [number, number, number] = [97, 166, 14]; // leafy green — person A
+const B_RGB: [number, number, number] = [123, 44, 191]; // cow purple — person B
+const MID_RGB: [number, number, number] = [255, 205, 20]; // star yellow — balanced
 
-const GAP_RANGE = 25; // minutes of advantage for a full-strength hue
+const GAP_RANGE = 14; // minutes of advantage for a fully-saturated hue (steep = obvious)
 
-/** Diverging advantage color: gap = tA - tB minutes. Negative → teal (A's turf). */
+/** Diverging advantage color: gap = tA - tB minutes. Negative → green (A's turf). */
 export function advantageColor(gap: number): [number, number, number] {
   const t = Math.max(-1, Math.min(1, gap / GAP_RANGE));
   const [c0, c1, f] = t < 0 ? [A_RGB, MID_RGB, t + 1] : [MID_RGB, B_RGB, t];
   return [c0[0] + (c1[0] - c0[0]) * f, c0[1] + (c1[1] - c0[1]) * f, c0[2] + (c1[2] - c0[2]) * f];
 }
 
-// Closeness bands: quantized +5-minute steps of combined travel time from the
-// best meeting zone. Brightest = quickest for both; fades stepwise outward.
-const BAND_MIN = 5; // minutes per band
-const BAND_ALPHA = [120, 96, 72, 52, 34, 20, 10]; // one entry per band, then 0
-const WARM_CORE: [number, number, number] = [240, 186, 89]; // saffron glow
+// Heat focus: fully opaque inside the recommended zone (near the best combined
+// time), falling to nothing beyond it so the heat hugs the results.
+const ZONE_FULL_MIN = 8; // minutes past the optimum at full strength
+const ZONE_EDGE_MIN = 26; // gone entirely by here
+const MAX_ALPHA = 232;
 
-export function renderBands(total: TimeField, gap: TimeField, grid: GridSpec): HTMLCanvasElement {
+export function renderHeat(total: TimeField, gap: TimeField, grid: GridSpec): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = grid.cols;
   canvas.height = grid.rows;
@@ -40,14 +40,14 @@ export function renderBands(total: TimeField, gap: TimeField, grid: GridSpec): H
         img.data[o + 3] = 0;
         continue;
       }
-      const band = Math.floor((total[i] - minTotal) / BAND_MIN);
-      if (band >= BAND_ALPHA.length) continue;
-      const [ar, ag, ab] = advantageColor(gap[i]);
-      // saffron closeness glow, leaning toward the closer person's hue
-      img.data[o] = WARM_CORE[0] * 0.6 + ar * 0.4;
-      img.data[o + 1] = WARM_CORE[1] * 0.6 + ag * 0.4;
-      img.data[o + 2] = WARM_CORE[2] * 0.6 + ab * 0.4;
-      img.data[o + 3] = BAND_ALPHA[band];
+      const d = total[i] - minTotal;
+      const zone = Math.max(0, Math.min(1, 1 - (d - ZONE_FULL_MIN) / (ZONE_EDGE_MIN - ZONE_FULL_MIN)));
+      if (zone <= 0) continue;
+      const [cr, cg, cb] = advantageColor(gap[i]);
+      img.data[o] = cr;
+      img.data[o + 1] = cg;
+      img.data[o + 2] = cb;
+      img.data[o + 3] = MAX_ALPHA * zone ** 1.3;
     }
   }
   ctx.putImageData(img, 0, 0);

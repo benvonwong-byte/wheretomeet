@@ -5,9 +5,9 @@ import subwayData from './data/subway.json';
 import { NYC_GRID } from './lib/geo';
 import { buildGraph, transitPath, type TransitGraph } from './lib/transit';
 import { timeField, comboLayer, minPersonField, scoreAtPoint, fairnessScore } from './lib/fairness';
-import { contourSegments, maskField } from './lib/contours';
+import { maskField } from './lib/contours';
 import landmaskData from './data/landmask.json';
-import { renderBands } from './lib/heat';
+import { renderHeat } from './lib/heat';
 import { filterVenues } from './lib/venues';
 import { geocode, makeSuggester, type GeoHit } from './lib/geocode';
 import { routedMinutes, routedField, routedGeometry } from './lib/osrm';
@@ -141,12 +141,11 @@ function activeCombos(): { a: Mode; b: Mode; key: string; on: boolean }[] {
 // ── Map ──────────────────────────────────────────────────────
 const map = L.map('map', { zoomControl: false }).setView([40.745, -73.96], 12);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
   attribution: '© OpenStreetMap contributors © CARTO',
   maxZoom: 19,
 }).addTo(map);
 
-const contourLayer = L.layerGroup().addTo(map);
 const venueLayer = L.layerGroup().addTo(map);
 
 function bulletIcon(who: 'A' | 'B'): L.DivIcon {
@@ -468,67 +467,33 @@ function recompute(venuesOnly: boolean): void {
   setStatus('Ready', 900);
 }
 
-// ── Closeness bands + 5-minute rings around the meeting zone ─
-// One radial system centered on where meeting is quickest for BOTH people:
-// bright saffron bands fade stepwise outward (+5′ of combined travel each),
-// crisp rings mark the steps, and everything breaks at water via the baked
-// land mask. Closer/farther is readable in one glance.
+// ── Advantage heatmap over the recommended zone ──────────────
+// Bold, opaque heat concentrated where meeting is quickest for BOTH people:
+// leafy green = closer for A, star yellow = even, cow purple = closer for B.
+// Clipped to land by the baked mask; fades out past the recommended zone.
 const LANDMASK = (landmaskData as { mask: string }).mask;
-const BAND_BOUNDS = L.latLngBounds([GRID.latMin, GRID.lngMin], [GRID.latMax, GRID.lngMax]);
-let bandOverlay: L.ImageOverlay | null = null;
-
-const RING_COLORS = ['#c05a35', '#cf7f40', '#d0a35e', '#b3a67f', '#9aa08c', '#878f93'];
+const HEAT_BOUNDS = L.latLngBounds([GRID.latMin, GRID.lngMin], [GRID.latMax, GRID.lngMax]);
+let heatOverlay: L.ImageOverlay | null = null;
 
 function drawContours(): void {
-  contourLayer.clearLayers();
   if (lastLayers.length === 0) return;
   const minA = maskField(minPersonField(lastLayers, 'A', CELLS), LANDMASK);
   const minB = maskField(minPersonField(lastLayers, 'B', CELLS), LANDMASK);
   const total = new Float32Array(CELLS);
   const gap = new Float32Array(CELLS);
-  let minTotal = Infinity;
   for (let i = 0; i < CELLS; i++) {
     total[i] = minA[i] + minB[i];
     gap[i] = minA[i] - minB[i];
-    if (total[i] < minTotal) minTotal = total[i];
   }
-  if (!isFinite(minTotal)) return;
 
-  const url = renderBands(total, gap, GRID).toDataURL();
-  if (bandOverlay) bandOverlay.setUrl(url);
+  const url = renderHeat(total, gap, GRID).toDataURL();
+  if (heatOverlay) heatOverlay.setUrl(url);
   else {
-    bandOverlay = L.imageOverlay(url, BAND_BOUNDS, {
-      opacity: 0.85,
+    heatOverlay = L.imageOverlay(url, HEAT_BOUNDS, {
+      opacity: 0.78,
       className: 'glow-img',
       interactive: false,
     }).addTo(map);
-  }
-
-  for (let k = 0; k < RING_COLORS.length; k++) {
-    const level = minTotal + (k + 1) * 5;
-    const segments = contourSegments(total, GRID, level);
-    if (!segments.length) continue;
-    const color = RING_COLORS[k];
-    const f = 1 - k / (RING_COLORS.length - 1);
-    L.polyline(segments as unknown as L.LatLngExpression[][], {
-      color,
-      weight: 1 + 1.4 * f,
-      opacity: 0.35 + 0.45 * f,
-      interactive: false,
-      lineCap: 'round',
-    }).addTo(contourLayer);
-    if (k < 4) {
-      const seg = segments[Math.floor(segments.length / 2)];
-      L.marker([(seg[0].lat + seg[1].lat) / 2, (seg[0].lng + seg[1].lng) / 2], {
-        icon: L.divIcon({
-          className: '',
-          html: `<div class="ring-label" style="color:${color}">+${(k + 1) * 5}′</div>`,
-          iconSize: [44, 16],
-          iconAnchor: [22, 8],
-        }),
-        interactive: false,
-      }).addTo(contourLayer);
-    }
   }
 }
 
@@ -596,8 +561,8 @@ async function drawRoutes(v: Venue, modeA: Mode, modeB: Mode): Promise<void> {
     dashArray: mode === 'transit' ? '2 8' : undefined, // transit = schematic station hops
     lineCap: 'round' as const,
   });
-  const a = L.polyline(pathA, style('#0e7c74', modeA)).addTo(routeLayer);
-  const b = L.polyline(pathB, style('#c05a35', modeB)).addTo(routeLayer);
+  const a = L.polyline(pathA, style('#4f8f00', modeA)).addTo(routeLayer);
+  const b = L.polyline(pathB, style('#7b2cbf', modeB)).addTo(routeLayer);
   map.fitBounds(a.getBounds().extend(b.getBounds()), {
     paddingTopLeft: [40, 40],
     paddingBottomRight: [40, 220],
@@ -655,12 +620,12 @@ function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB
   };
 }
 
-// Warm ramp for venue dot fills on the light map: sand → saffron → paprika.
+// Venue dot fills: neutral → star yellow → heart red (pops over the heat).
 function heatColor(t: number): string {
-  if (t > 0.8) return '#c05a35';
-  if (t > 0.6) return '#d9822b';
-  if (t > 0.4) return '#d9a63c';
-  return '#b3ac96';
+  if (t > 0.8) return '#e0445a';
+  if (t > 0.6) return '#f08c1d';
+  if (t > 0.4) return '#e2b400';
+  return '#a8ad9f';
 }
 
 // ── Exact street routing (OSRM) ──────────────────────────────

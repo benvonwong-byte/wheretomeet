@@ -1,17 +1,17 @@
 :root {
-  --ink: #f4f0e4; /* page: warm paper */
-  --rail: #faf7ec;
-  --rail-2: #ece6d4;
-  --line: #d9d2bc;
-  --paper: #26251d; /* strongest text */
-  --text: #45443a;
-  --dim: #8d8a77;
-  --a: #0e7c74; /* person A: juniper teal */
-  --b: #b85433; /* person B: paprika */
-  --hot: #b8496b; /* raspberry-jam accents (favorites) */
-  --amber: #c98a1f; /* saffron — highlights */
+  --ink: #f2f5f0; /* page: fresh near-white */
+  --rail: #ffffff;
+  --rail-2: #eef2ea;
+  --line: #dbe2d4;
+  --paper: #1f2617; /* strongest text */
+  --text: #3c4433;
+  --dim: #7f8874;
+  --a: #4f8f00; /* person A: leafy green */
+  --b: #7b2cbf; /* person B: cow purple */
+  --hot: #e0445a; /* heart red (favorites) */
+  --amber: #e2a400; /* star yellow — highlights */
   --teal: #00b3a4;
-  --vegan: #5a7a3a; /* thyme green — the brand */
+  --vegan: #61a60e; /* HappyCow leafy green — the brand */
   --mono: 'IBM Plex Mono', ui-monospace, monospace;
   --sans: 'Archivo', sans-serif;
 }
@@ -65,7 +65,7 @@ body {
 
 .brand h1 {
   font-family: 'Fraunces', serif;
-  font-weight: 650;
+  font-weight: 680;
   font-size: 30px;
   letter-spacing: -0.02em;
   margin: 0;
@@ -168,9 +168,9 @@ body {
 }
 
 .mode-pill.on {
-  background: var(--paper);
-  color: var(--ink);
-  border-color: var(--paper);
+  background: var(--vegan);
+  color: #fff;
+  border-color: var(--vegan);
 }
 
 /* ── Panels ───────────────────────────── */
@@ -205,7 +205,7 @@ body {
   border-radius: 3px;
   border: 1px solid var(--line);
   /* A-blue → gold core → B-red, matching the map washes */
-  background: linear-gradient(90deg, rgba(14, 124, 116, 0.9), #d99a2b, rgba(192, 90, 53, 0.9));
+  background: linear-gradient(90deg, rgb(97, 166, 14), rgb(255, 205, 20), rgb(123, 44, 191));
   flex: none;
   transition: opacity 0.12s;
 }
@@ -272,15 +272,15 @@ body {
 }
 
 .chip.hero.on.vegan {
-  background: #e2efdd;
+  background: #ecf6df;
   border-color: var(--vegan);
-  color: #2e6e3c;
+  color: #47791a;
 }
 
 .chip.hero.on.tea {
-  background: #f7e8d0;
+  background: #fff5d6;
   border-color: var(--amber);
-  color: #9a5f14;
+  color: #96700a;
 }
 
 /* ── Venue list ───────────────────────── */
@@ -337,12 +337,12 @@ body {
 }
 
 #venues .v-times b.ta {
-  color: #0e7c74;
+  color: #4f8f00;
   font-weight: 600;
 }
 
 #venues .v-times b.tb {
-  color: #b85433;
+  color: #7b2cbf;
   font-weight: 600;
 }
 
@@ -364,18 +364,18 @@ body {
 }
 
 .tag.vegan2 {
-  background: #e2efdd;
-  color: #2e6e3c;
+  background: #e3f2cf;
+  color: #3f7212;
 }
 
 .tag.vegan1 {
-  background: #eaf1e2;
-  color: #4c7f56;
+  background: #eef5e3;
+  color: #5c8532;
 }
 
 .tag.tea {
-  background: #f7e8d0;
-  color: #9a5f14;
+  background: #fff5d6;
+  color: #96700a;
 }
 
 .empty {
@@ -397,7 +397,7 @@ body {
 /* ── Map ──────────────────────────────── */
 #map {
   height: 100%;
-  background: #ece8dc;
+  background: #e9ede7;
 }
 
 .leaflet-container {
@@ -471,11 +471,11 @@ body {
 }
 
 .pop-times .ca {
-  color: #0e7c74;
+  color: #4f8f00;
 }
 
 .pop-times .cb {
-  color: #b85433;
+  color: #7b2cbf;
 }
 
 .pop-link {
@@ -525,16 +525,6 @@ body {
 .glow-img {
   filter: blur(4px) saturate(1.15);
   image-rendering: auto;
-}
-
-/* contour ring minute-labels */
-.ring-label {
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 600;
-  text-align: center;
-  text-shadow: 0 0 3px #fff, 0 0 6px #fff, 0 0 9px #fff;
-  pointer-events: none;
 }
 
 /* ── Autocomplete ─────────────────────── */
@@ -697,11 +687,11 @@ body {
 }
 
 .detail-times .ca {
-  color: #0e7c74;
+  color: #4f8f00;
 }
 
 .detail-times .cb {
-  color: #b85433;
+  color: #7b2cbf;
 }
 
 .detail-times .gap {
@@ -762,17 +752,17 @@ body {
 }
 
 .bias-labels .bias-a {
-  color: #0e7c74;
+  color: #4f8f00;
 }
 
 .bias-labels .bias-b {
-  color: #b85433;
+  color: #7b2cbf;
 }
 
 #bias-val {
   font-size: 11px;
   font-weight: 600;
-  color: #b06010;
+  color: #a07500;
 }
 
 .routed {
@@ -789,7 +779,7 @@ body {
 .adv-bar {
   height: 10px;
   border-radius: 5px;
-  background: linear-gradient(90deg, rgb(14, 124, 116), rgb(217, 154, 43), rgb(192, 90, 53));
+  background: linear-gradient(90deg, rgb(97, 166, 14), rgb(255, 205, 20), rgb(123, 44, 191));
   border: 1px solid var(--line);
 }
 
@@ -804,16 +794,16 @@ body {
 }
 
 .adv-labels .adv-a {
-  color: #0e7c74;
+  color: #4f8f00;
 }
 
 .adv-labels .adv-mid {
-  color: #b06010;
+  color: #a07500;
   font-weight: 600;
 }
 
 .adv-labels .adv-b {
-  color: #b85433;
+  color: #7b2cbf;
 }
 
 .layers-head {
@@ -831,14 +821,14 @@ body {
 
 /* bubble tea = taro purple, distinct from tea-house gold */
 .chip.hero.on.boba {
-  background: #f0e4d3;
-  border-color: #a97e4f;
-  color: #7d5a30;
+  background: #f3ebe0;
+  border-color: #b08a5a;
+  color: #7d5f38;
 }
 
 .tag.boba {
-  background: #f0e4d3;
-  color: #7d5a30;
+  background: #f3ebe0;
+  color: #7d5f38;
 }
 
 /* ── Emoji venue pins ─────────────────── */
