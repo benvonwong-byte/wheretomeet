@@ -271,10 +271,11 @@ describe('isochrone contours', () => {
     expect(colors).toContain('rgb(215,71,65)'); // crimson-leaning (B turf, gap +20 bucket)
   });
 
-  it('levels start just outside the optimum and step outward', () => {
+  it('levels are 5-minute increments starting just past the optimum', () => {
     const levels = contourLevels(31);
-    expect(levels[0]).toBeGreaterThan(31);
-    for (let i = 1; i < levels.length; i++) expect(levels[i]).toBeGreaterThan(levels[i - 1]);
+    expect(levels[0]).toBe(35);
+    for (const l of levels) expect(l % 5).toBe(0);
+    for (let i = 1; i < levels.length; i++) expect(levels[i] - levels[i - 1]).toBe(5);
   });
 
   it('empty on all-unreachable fields', () => {

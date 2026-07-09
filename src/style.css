@@ -521,12 +521,17 @@ body {
     order: 1;
   }
 }
+/* the sweet-spot bloom */
+.glow-img {
+  filter: blur(4px) saturate(1.15);
+  image-rendering: auto;
+}
+
 /* contour ring minute-labels */
 .ring-label {
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 600;
-  color: #7a5410;
   text-align: center;
   text-shadow: 0 0 3px #fff, 0 0 6px #fff, 0 0 9px #fff;
   pointer-events: none;

@@ -6,6 +6,7 @@ import { NYC_GRID } from './lib/geo';
 import { buildGraph, transitPath, type TransitGraph } from './lib/transit';
 import { timeField, comboLayer, minPersonField, scoreAtPoint, fairnessScore } from './lib/fairness';
 import { buildContours } from './lib/contours';
+import { renderGlow } from './lib/heat';
 import { filterVenues } from './lib/venues';
 import { geocode, makeSuggester, type GeoHit } from './lib/geocode';
 import { routedMinutes, routedField, routedGeometry } from './lib/osrm';
@@ -466,9 +467,15 @@ function recompute(venuesOnly: boolean): void {
   setStatus('Ready', 900);
 }
 
-// ── Isochrone contour rings ──────────────────────────────────
-// Rings = combined travel time (labeled, minutes); the color along each
-// ring = who reaches that stretch sooner (violet A ↔ orange even ↔ crimson B).
+// ── Radial glow + 5-minute rings ─────────────────────────────
+// A warm bloom marks the optimum (hue leans toward whoever is closer);
+// concentric rings step outward in 5-minute increments of combined time,
+// vivid at the core and cooling/fading with distance.
+const GLOW_BOUNDS = L.latLngBounds([GRID.latMin, GRID.lngMin], [GRID.latMax, GRID.lngMax]);
+let glowOverlay: L.ImageOverlay | null = null;
+
+const RING_COLORS = ['#e0403a', '#e8652e', '#eb9035', '#daa74d', '#c2a76d', '#a89f85', '#93948e', '#7f8b96'];
+
 function drawContours(): void {
   contourLayer.clearLayers();
   if (lastLayers.length === 0) return;
@@ -481,27 +488,50 @@ function drawContours(): void {
     gap[i] = minA[i] - minB[i];
   }
 
+  const url = renderGlow(total, gap, GRID).toDataURL();
+  if (glowOverlay) glowOverlay.setUrl(url);
+  else {
+    glowOverlay = L.imageOverlay(url, GLOW_BOUNDS, {
+      opacity: 0.8,
+      className: 'glow-img',
+      interactive: false,
+    }).addTo(map);
+  }
+
   const sets = buildContours(total, gap, GRID);
   const n = sets.length;
   for (const set of sets) {
     const f = 1 - set.rank / Math.max(n - 1, 1); // 1 = innermost
-    const weight = 1.2 + 2.3 * f;
-    const opacity = 0.3 + 0.55 * f;
-    for (const batch of set.batches) {
-      L.polyline(batch.segments as unknown as L.LatLngExpression[][], {
-        color: batch.color,
-        weight,
-        opacity,
-        interactive: false,
-        lineCap: 'round',
-      }).addTo(contourLayer);
-    }
-    // Minute labels on the three inner rings.
-    if (set.rank < 3) {
-      const seg = set.batches[0]?.segments[Math.floor((set.batches[0]?.segments.length ?? 0) / 2)];
+    const color = RING_COLORS[Math.min(set.rank, RING_COLORS.length - 1)];
+    const segments = set.batches.flatMap((b) => b.segments) as unknown as L.LatLngExpression[][];
+    if (!segments.length) continue;
+    // halo pass (the glow around each ring), then crisp core
+    L.polyline(segments, {
+      color,
+      weight: 7 + 4 * f,
+      opacity: 0.07 + 0.1 * f,
+      interactive: false,
+      lineCap: 'round',
+    }).addTo(contourLayer);
+    L.polyline(segments, {
+      color,
+      weight: 1.1 + 1.7 * f,
+      opacity: 0.35 + 0.55 * f,
+      interactive: false,
+      lineCap: 'round',
+    }).addTo(contourLayer);
+    // Minute labels on the four inner rings.
+    if (set.rank < 4) {
+      const all = set.batches.flatMap((b) => b.segments);
+      const seg = all[Math.floor(all.length / 2)];
       if (seg) {
         L.marker([(seg[0].lat + seg[1].lat) / 2, (seg[0].lng + seg[1].lng) / 2], {
-          icon: L.divIcon({ className: '', html: `<div class="ring-label">${Math.round(set.level)}′</div>`, iconSize: [40, 16], iconAnchor: [20, 8] }),
+          icon: L.divIcon({
+            className: '',
+            html: `<div class="ring-label" style="color:${color}">${Math.round(set.level)}′</div>`,
+            iconSize: [40, 16],
+            iconAnchor: [20, 8],
+          }),
           interactive: false,
         }).addTo(contourLayer);
       }

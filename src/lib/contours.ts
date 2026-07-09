@@ -112,10 +112,10 @@ export function contourAt(
     .filter((b) => b.segments.length > 0);
 }
 
-/** Ring levels: the best combined time + fixed steps outward. */
+/** Ring levels: 5-minute increments radiating out from the optimum. */
 export function contourLevels(minTotal: number): number[] {
-  const base = Math.ceil(minTotal / 2) * 2 + 4; // first ring just outside the optimum
-  return [base, base + 6, base + 12, base + 20, base + 30, base + 45];
+  const base = Math.ceil((minTotal + 2) / 5) * 5; // first 5-min mark past the optimum
+  return Array.from({ length: 8 }, (_, i) => base + i * 5);
 }
 
 export function buildContours(total: TimeField, gap: TimeField, grid: GridSpec): ContourSet[] {
