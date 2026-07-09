@@ -588,7 +588,15 @@ function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB
         `<td class="gap">Δ${Math.round(Math.abs(c.tA - c.tB))}′</td></tr>`,
     )
     .join('');
-  const meta = metaLine(v);
+  // Cuisine/price only — the rating gets its own prominent row.
+  const metaBits: string[] = [];
+  if (v.price) metaBits.push(`<span class="price">${'$'.repeat(v.price)}</span>`);
+  if (v.cuisine) metaBits.push(esc(v.cuisine.split(';')[0].replace(/_/g, ' ')));
+  const meta = metaBits.join(' · ');
+  const ratingRow =
+    v.rating != null
+      ? `<div class="detail-rating"><span class="stars">${'★'.repeat(Math.round(v.rating))}${'☆'.repeat(5 - Math.round(v.rating))}</span> <b>${v.rating.toFixed(1)}</b>${v.ratings ? ` · ${v.ratings.toLocaleString()} reviews` : ''}</div>`
+      : `<div class="detail-rating none"><span class="stars">☆☆☆☆☆</span> not yet rated</div>`;
   const isFav = loadFavs(state.A.pt, state.B.pt).has(v.id);
   detailEl.innerHTML =
     `<button class="detail-close" aria-label="Close">✕</button>` +
@@ -596,6 +604,7 @@ function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB
     (v.img ? `<img class="detail-img" src="${esc(v.img)}" alt="" onerror="this.remove()" />` : '') +
     `<div class="detail-body">` +
     `<h3>${venueEmoji(v)} ${esc(v.name)}</h3>` +
+    ratingRow +
     (meta ? `<div class="detail-meta">${meta}</div>` : '') +
     `<div class="detail-tags">${venueTags(v)}</div>` +
     (v.desc ? `<p class="detail-desc">${esc(v.desc)}</p>` : '') +

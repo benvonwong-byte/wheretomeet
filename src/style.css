@@ -630,7 +630,7 @@ body {
   font-size: 17px;
   font-weight: 800;
   color: var(--paper);
-  padding-right: 22px;
+  padding-right: 42px;
 }
 
 .detail-meta {
@@ -920,14 +920,15 @@ body {
 
 .detail-fav {
   position: absolute;
-  top: 8px;
-  right: 42px;
+  top: 42px;
+  right: 8px;
   z-index: 2;
-  width: 26px;
-  height: 26px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.9);
-  font-size: 13px;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.18);
+  font-size: 19px;
 }
 
 .pin-leaf {
@@ -1048,4 +1049,34 @@ body {
     left: auto;
     width: min(272px, 70vw);
   }
+}
+
+/* ── Detail rating row ────────────────── */
+.detail-rating {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+  margin: 2px 0 6px;
+}
+
+.detail-rating .stars {
+  font-size: 15px;
+  letter-spacing: 2px;
+  color: var(--amber);
+}
+
+.detail-rating b {
+  font-size: 14px;
+}
+
+.detail-rating.none {
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.detail-rating.none .stars {
+  color: #c9cec2;
 }
