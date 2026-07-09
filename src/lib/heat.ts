@@ -1,27 +1,27 @@
 import type { GridSpec, TimeField } from './types';
 
-// Advantage color scale for contour lines on the light basemap:
-// violet = A reaches this stretch sooner, crimson = B does, orange = even.
-const A_RGB: [number, number, number] = [109, 63, 212]; // violet — person A
-const B_RGB: [number, number, number] = [214, 60, 68]; // crimson — person B
-const MID_RGB: [number, number, number] = [224, 134, 44]; // burnt orange — balanced
+// Thyme & Place advantage scale — culinary earth tones, no default-AI violet:
+// juniper teal = A reaches this ground sooner, paprika = B does, saffron = even.
+const A_RGB: [number, number, number] = [14, 124, 116]; // juniper teal — person A
+const B_RGB: [number, number, number] = [192, 90, 53]; // paprika — person B
+const MID_RGB: [number, number, number] = [217, 154, 43]; // saffron — balanced
 
 const GAP_RANGE = 25; // minutes of advantage for a full-strength hue
 
-/** Diverging advantage color: gap = tA - tB minutes. Negative → blue (A's turf). */
+/** Diverging advantage color: gap = tA - tB minutes. Negative → teal (A's turf). */
 export function advantageColor(gap: number): [number, number, number] {
   const t = Math.max(-1, Math.min(1, gap / GAP_RANGE));
   const [c0, c1, f] = t < 0 ? [A_RGB, MID_RGB, t + 1] : [MID_RGB, B_RGB, t];
   return [c0[0] + (c1[0] - c0[0]) * f, c0[1] + (c1[1] - c0[1]) * f, c0[2] + (c1[2] - c0[2]) * f];
 }
 
-// Radial glow: a warm bloom centered on the best-combined-time zone, fading
-// with a gaussian falloff; hue leans toward whichever person is closer.
-const GLOW_GOLD: [number, number, number] = [255, 206, 100];
-const GLOW_FALLOFF_MIN = 16; // minutes past the optimum per e-fold² of fade
-const GLOW_MAX_ALPHA = 135;
+// Closeness bands: quantized +5-minute steps of combined travel time from the
+// best meeting zone. Brightest = quickest for both; fades stepwise outward.
+const BAND_MIN = 5; // minutes per band
+const BAND_ALPHA = [120, 96, 72, 52, 34, 20, 10]; // one entry per band, then 0
+const WARM_CORE: [number, number, number] = [240, 186, 89]; // saffron glow
 
-export function renderGlow(total: TimeField, gap: TimeField, grid: GridSpec): HTMLCanvasElement {
+export function renderBands(total: TimeField, gap: TimeField, grid: GridSpec): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = grid.cols;
   canvas.height = grid.rows;
@@ -40,15 +40,14 @@ export function renderGlow(total: TimeField, gap: TimeField, grid: GridSpec): HT
         img.data[o + 3] = 0;
         continue;
       }
-      const d = total[i] - minTotal;
-      const alpha = GLOW_MAX_ALPHA * Math.exp(-((d / GLOW_FALLOFF_MIN) ** 2));
-      if (alpha < 2) continue;
+      const band = Math.floor((total[i] - minTotal) / BAND_MIN);
+      if (band >= BAND_ALPHA.length) continue;
       const [ar, ag, ab] = advantageColor(gap[i]);
-      // golden core leaning toward the closer person's hue
-      img.data[o] = GLOW_GOLD[0] * 0.55 + ar * 0.45;
-      img.data[o + 1] = GLOW_GOLD[1] * 0.55 + ag * 0.45;
-      img.data[o + 2] = GLOW_GOLD[2] * 0.55 + ab * 0.45;
-      img.data[o + 3] = alpha;
+      // saffron closeness glow, leaning toward the closer person's hue
+      img.data[o] = WARM_CORE[0] * 0.6 + ar * 0.4;
+      img.data[o + 1] = WARM_CORE[1] * 0.6 + ag * 0.4;
+      img.data[o + 2] = WARM_CORE[2] * 0.6 + ab * 0.4;
+      img.data[o + 3] = BAND_ALPHA[band];
     }
   }
   ctx.putImageData(img, 0, 0);

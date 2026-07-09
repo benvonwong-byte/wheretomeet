@@ -6,12 +6,12 @@
   --paper: #26251d; /* strongest text */
   --text: #45443a;
   --dim: #8d8a77;
-  --a: #6d3fd4; /* person A: violet */
-  --b: #d63c44; /* person B: crimson */
-  --hot: #d94f8e; /* magenta accents (favorites) */
-  --amber: #d97a1e; /* burnt orange — rings, highlights */
+  --a: #0e7c74; /* person A: juniper teal */
+  --b: #b85433; /* person B: paprika */
+  --hot: #b8496b; /* raspberry-jam accents (favorites) */
+  --amber: #c98a1f; /* saffron — highlights */
   --teal: #00b3a4;
-  --vegan: #3f8f4f; /* deep matcha — the brand */
+  --vegan: #5a7a3a; /* thyme green — the brand */
   --mono: 'IBM Plex Mono', ui-monospace, monospace;
   --sans: 'Archivo', sans-serif;
 }
@@ -64,9 +64,9 @@ body {
 }
 
 .brand h1 {
-  font-weight: 900;
-  font-stretch: 105%;
-  font-size: 25px;
+  font-family: 'Fraunces', serif;
+  font-weight: 650;
+  font-size: 30px;
   letter-spacing: -0.02em;
   margin: 0;
   line-height: 1;
@@ -74,7 +74,7 @@ body {
 }
 
 .brand h1 em {
-  font-style: normal;
+  font-style: italic;
   color: var(--vegan);
 }
 
@@ -205,7 +205,7 @@ body {
   border-radius: 3px;
   border: 1px solid var(--line);
   /* A-blue → gold core → B-red, matching the map washes */
-  background: linear-gradient(90deg, rgba(109, 63, 212, 0.9), #e0862c, rgba(214, 60, 68, 0.9));
+  background: linear-gradient(90deg, rgba(14, 124, 116, 0.9), #d99a2b, rgba(192, 90, 53, 0.9));
   flex: none;
   transition: opacity 0.12s;
 }
@@ -337,12 +337,12 @@ body {
 }
 
 #venues .v-times b.ta {
-  color: #5e46c9;
+  color: #0e7c74;
   font-weight: 600;
 }
 
 #venues .v-times b.tb {
-  color: #c8503f;
+  color: #b85433;
   font-weight: 600;
 }
 
@@ -471,11 +471,11 @@ body {
 }
 
 .pop-times .ca {
-  color: #5e46c9;
+  color: #0e7c74;
 }
 
 .pop-times .cb {
-  color: #c8503f;
+  color: #b85433;
 }
 
 .pop-link {
@@ -697,11 +697,11 @@ body {
 }
 
 .detail-times .ca {
-  color: #5e46c9;
+  color: #0e7c74;
 }
 
 .detail-times .cb {
-  color: #c8503f;
+  color: #b85433;
 }
 
 .detail-times .gap {
@@ -762,11 +762,11 @@ body {
 }
 
 .bias-labels .bias-a {
-  color: #5e46c9;
+  color: #0e7c74;
 }
 
 .bias-labels .bias-b {
-  color: #c8503f;
+  color: #b85433;
 }
 
 #bias-val {
@@ -789,7 +789,7 @@ body {
 .adv-bar {
   height: 10px;
   border-radius: 5px;
-  background: linear-gradient(90deg, rgb(109, 63, 212), rgb(224, 134, 44), rgb(214, 60, 68));
+  background: linear-gradient(90deg, rgb(14, 124, 116), rgb(217, 154, 43), rgb(192, 90, 53));
   border: 1px solid var(--line);
 }
 
@@ -804,7 +804,7 @@ body {
 }
 
 .adv-labels .adv-a {
-  color: #5e46c9;
+  color: #0e7c74;
 }
 
 .adv-labels .adv-mid {
@@ -813,7 +813,7 @@ body {
 }
 
 .adv-labels .adv-b {
-  color: #c8503f;
+  color: #b85433;
 }
 
 .layers-head {
@@ -831,14 +831,14 @@ body {
 
 /* bubble tea = taro purple, distinct from tea-house gold */
 .chip.hero.on.boba {
-  background: #ece4f8;
-  border-color: #9d7fd6;
-  color: #6a48ab;
+  background: #f0e4d3;
+  border-color: #a97e4f;
+  color: #7d5a30;
 }
 
 .tag.boba {
-  background: #ece4f8;
-  color: #6a48ab;
+  background: #f0e4d3;
+  color: #7d5a30;
 }
 
 /* ── Emoji venue pins ─────────────────── */

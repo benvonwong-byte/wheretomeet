@@ -76,34 +76,15 @@ export function contourSegments(field: TimeField, grid: GridSpec, level: number)
   return out;
 }
 
-export interface RingFamily {
-  /** Absolute minutes from this person's door. */
-  level: number;
-  /** Bold index ring (every 5 minutes) vs 1-minute hairline. */
-  index: boolean;
-  /** 0 at the person's fastest reachable cell → 1 at the range edge. */
-  fade: number;
-  segments: [Pt, Pt][];
-}
-
-const RING_RANGE_MIN = 40; // how far out (minutes) each person's ripples extend
-
-/** 1-minute isochrone rings radiating from one person's travel-time field. */
-export function personRings(field: TimeField, grid: GridSpec): RingFamily[] {
-  let minT = Infinity;
-  for (let i = 0; i < field.length; i++) if (field[i] < minT) minT = field[i];
-  if (!isFinite(minT)) return [];
-  const start = Math.ceil(minT + 0.5);
-  const rings: RingFamily[] = [];
-  for (let level = start; level <= minT + RING_RANGE_MIN; level++) {
-    const segments = contourSegments(field, grid, level);
-    if (!segments.length) continue;
-    rings.push({
-      level,
-      index: level % 5 === 0,
-      fade: (level - minT) / RING_RANGE_MIN,
-      segments,
-    });
+/**
+ * Apply a land mask ('1' = on-network) to a time field: masked cells become
+ * Infinity so bands and rings break at water instead of gliding across it.
+ * Returns a new array; the input (used for venue scoring) is untouched.
+ */
+export function maskField(field: TimeField, mask: string): Float32Array {
+  const out = new Float32Array(field.length);
+  for (let i = 0; i < field.length; i++) {
+    out[i] = mask.charCodeAt(i) === 49 ? field[i] : Infinity;
   }
-  return rings;
+  return out;
 }

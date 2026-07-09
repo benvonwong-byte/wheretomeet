@@ -1,4 +1,4 @@
-# MEET YOUR GREENS
+# THYME & PLACE
 
 Fair meeting zones for two people in New York City. Enter two addresses (or drag the A/B pins), pick each person's travel modes, and a heatmap shows where meeting is *fair* — where both arrive in similar time. Real vegan, tea, cafe, restaurant, and activity venues are ranked inside the hot zone.
 

@@ -5,8 +5,9 @@ import subwayData from './data/subway.json';
 import { NYC_GRID } from './lib/geo';
 import { buildGraph, transitPath, type TransitGraph } from './lib/transit';
 import { timeField, comboLayer, minPersonField, scoreAtPoint, fairnessScore } from './lib/fairness';
-import { personRings } from './lib/contours';
-import { renderGlow } from './lib/heat';
+import { contourSegments, maskField } from './lib/contours';
+import landmaskData from './data/landmask.json';
+import { renderBands } from './lib/heat';
 import { filterVenues } from './lib/venues';
 import { geocode, makeSuggester, type GeoHit } from './lib/geocode';
 import { routedMinutes, routedField, routedGeometry } from './lib/osrm';
@@ -467,64 +468,68 @@ function recompute(venuesOnly: boolean): void {
   setStatus('Ready', 900);
 }
 
-// ── Dual ripples: 1-minute rings from each person ────────────
-// Violet rings radiate from A, crimson from B, hairlines every minute with
-// bold index rings every 5 — two ripple systems whose collision zone is the
-// meeting ground, marked by the warm glow.
-const GLOW_BOUNDS = L.latLngBounds([GRID.latMin, GRID.lngMin], [GRID.latMax, GRID.lngMax]);
-let glowOverlay: L.ImageOverlay | null = null;
+// ── Closeness bands + 5-minute rings around the meeting zone ─
+// One radial system centered on where meeting is quickest for BOTH people:
+// bright saffron bands fade stepwise outward (+5′ of combined travel each),
+// crisp rings mark the steps, and everything breaks at water via the baked
+// land mask. Closer/farther is readable in one glance.
+const LANDMASK = (landmaskData as { mask: string }).mask;
+const BAND_BOUNDS = L.latLngBounds([GRID.latMin, GRID.lngMin], [GRID.latMax, GRID.lngMax]);
+let bandOverlay: L.ImageOverlay | null = null;
 
-function drawRingFamily(field: TimeField, color: string): void {
-  for (const ring of personRings(field, GRID)) {
-    const dim = 1 - 0.55 * ring.fade; // fade with distance from the person
-    L.polyline(ring.segments as unknown as L.LatLngExpression[][], {
-      color,
-      weight: ring.index ? 1.7 : 0.6,
-      opacity: (ring.index ? 0.55 : 0.18) * dim,
-      interactive: false,
-      lineCap: 'round',
-    }).addTo(contourLayer);
-    // Minute labels on the first few index rings.
-    if (ring.index && ring.level % 10 === 0 && ring.fade < 0.6) {
-      const seg = ring.segments[Math.floor(ring.segments.length / 2)];
-      L.marker([(seg[0].lat + seg[1].lat) / 2, (seg[0].lng + seg[1].lng) / 2], {
-        icon: L.divIcon({
-          className: '',
-          html: `<div class="ring-label" style="color:${color}">${ring.level}′</div>`,
-          iconSize: [40, 16],
-          iconAnchor: [20, 8],
-        }),
-        interactive: false,
-      }).addTo(contourLayer);
-    }
-  }
-}
+const RING_COLORS = ['#c05a35', '#cf7f40', '#d0a35e', '#b3a67f', '#9aa08c', '#878f93'];
 
 function drawContours(): void {
   contourLayer.clearLayers();
   if (lastLayers.length === 0) return;
-  const minA = minPersonField(lastLayers, 'A', CELLS);
-  const minB = minPersonField(lastLayers, 'B', CELLS);
+  const minA = maskField(minPersonField(lastLayers, 'A', CELLS), LANDMASK);
+  const minB = maskField(minPersonField(lastLayers, 'B', CELLS), LANDMASK);
   const total = new Float32Array(CELLS);
   const gap = new Float32Array(CELLS);
+  let minTotal = Infinity;
   for (let i = 0; i < CELLS; i++) {
     total[i] = minA[i] + minB[i];
     gap[i] = minA[i] - minB[i];
+    if (total[i] < minTotal) minTotal = total[i];
   }
+  if (!isFinite(minTotal)) return;
 
-  // Warm bloom over the best meeting zone.
-  const url = renderGlow(total, gap, GRID).toDataURL();
-  if (glowOverlay) glowOverlay.setUrl(url);
+  const url = renderBands(total, gap, GRID).toDataURL();
+  if (bandOverlay) bandOverlay.setUrl(url);
   else {
-    glowOverlay = L.imageOverlay(url, GLOW_BOUNDS, {
-      opacity: 0.8,
+    bandOverlay = L.imageOverlay(url, BAND_BOUNDS, {
+      opacity: 0.85,
       className: 'glow-img',
       interactive: false,
     }).addTo(map);
   }
 
-  drawRingFamily(minA, '#6d3fd4'); // A: violet ripples
-  drawRingFamily(minB, '#d63c44'); // B: crimson ripples
+  for (let k = 0; k < RING_COLORS.length; k++) {
+    const level = minTotal + (k + 1) * 5;
+    const segments = contourSegments(total, GRID, level);
+    if (!segments.length) continue;
+    const color = RING_COLORS[k];
+    const f = 1 - k / (RING_COLORS.length - 1);
+    L.polyline(segments as unknown as L.LatLngExpression[][], {
+      color,
+      weight: 1 + 1.4 * f,
+      opacity: 0.35 + 0.45 * f,
+      interactive: false,
+      lineCap: 'round',
+    }).addTo(contourLayer);
+    if (k < 4) {
+      const seg = segments[Math.floor(segments.length / 2)];
+      L.marker([(seg[0].lat + seg[1].lat) / 2, (seg[0].lng + seg[1].lng) / 2], {
+        icon: L.divIcon({
+          className: '',
+          html: `<div class="ring-label" style="color:${color}">+${(k + 1) * 5}′</div>`,
+          iconSize: [44, 16],
+          iconAnchor: [22, 8],
+        }),
+        interactive: false,
+      }).addTo(contourLayer);
+    }
+  }
 }
 
 // ── Venues ───────────────────────────────────────────────────
@@ -591,8 +596,8 @@ async function drawRoutes(v: Venue, modeA: Mode, modeB: Mode): Promise<void> {
     dashArray: mode === 'transit' ? '2 8' : undefined, // transit = schematic station hops
     lineCap: 'round' as const,
   });
-  const a = L.polyline(pathA, style('#6d3fd4', modeA)).addTo(routeLayer);
-  const b = L.polyline(pathB, style('#d63c44', modeB)).addTo(routeLayer);
+  const a = L.polyline(pathA, style('#0e7c74', modeA)).addTo(routeLayer);
+  const b = L.polyline(pathB, style('#c05a35', modeB)).addTo(routeLayer);
   map.fitBounds(a.getBounds().extend(b.getBounds()), {
     paddingTopLeft: [40, 40],
     paddingBottomRight: [40, 220],
@@ -650,11 +655,11 @@ function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB
   };
 }
 
-// Warm ramp for venue dot fills on the light map: sand → orange → crimson.
+// Warm ramp for venue dot fills on the light map: sand → saffron → paprika.
 function heatColor(t: number): string {
-  if (t > 0.8) return '#d63c44';
-  if (t > 0.6) return '#e07b2a';
-  if (t > 0.4) return '#dbb13b';
+  if (t > 0.8) return '#c05a35';
+  if (t > 0.6) return '#d9822b';
+  if (t > 0.4) return '#d9a63c';
   return '#b3ac96';
 }
 

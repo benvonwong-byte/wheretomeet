@@ -7,7 +7,7 @@ import { filterVenues } from './venues';
 import { advantageColor } from './heat';
 import { venueEmoji } from './emoji';
 import { pairKey } from './favs';
-import { contourSegments, personRings } from './contours';
+import { contourSegments, maskField } from './contours';
 import { encodeShare, parseShare } from './share';
 import type { SubwayData, Venue } from './types';
 
@@ -221,19 +221,19 @@ describe('fairness', () => {
 });
 
 describe('advantage color', () => {
-  it('diverges: A turf violet, balanced orange, B turf crimson — and clamps', () => {
-    expect(advantageColor(-25)).toEqual([109, 63, 212]); // full A violet
-    expect(advantageColor(-60)).toEqual([109, 63, 212]); // clamped
-    expect(advantageColor(0)).toEqual([224, 134, 44]); // balanced orange
-    expect(advantageColor(25)).toEqual([214, 60, 68]); // full B crimson
-    expect(advantageColor(60)).toEqual([214, 60, 68]); // clamped
+  it('diverges: A turf juniper teal, balanced saffron, B turf paprika — and clamps', () => {
+    expect(advantageColor(-25)).toEqual([14, 124, 116]); // full A teal
+    expect(advantageColor(-60)).toEqual([14, 124, 116]); // clamped
+    expect(advantageColor(0)).toEqual([217, 154, 43]); // saffron balanced
+    expect(advantageColor(25)).toEqual([192, 90, 53]); // full B paprika
+    expect(advantageColor(60)).toEqual([192, 90, 53]); // clamped
   });
 
   it('interpolates smoothly between poles', () => {
-    const [r, g, b] = advantageColor(-12.5); // halfway A-violet → orange
-    expect(r).toBeCloseTo((109 + 224) / 2, 0);
-    expect(g).toBeCloseTo((63 + 134) / 2, 0);
-    expect(b).toBeCloseTo((212 + 44) / 2, 0);
+    const [r, g, b] = advantageColor(-12.5); // halfway A-teal → saffron
+    expect(r).toBeCloseTo((14 + 217) / 2, 0);
+    expect(g).toBeCloseTo((124 + 154) / 2, 0);
+    expect(b).toBeCloseTo((116 + 43) / 2, 0);
   });
 });
 
@@ -262,21 +262,32 @@ describe('isochrone contours', () => {
     }
   });
 
-  it('personRings: 1-minute levels, index rings every 5, fade grows outward', () => {
-    const rings = personRings(total, cgrid);
-    expect(rings.length).toBeGreaterThan(10);
-    for (let i = 1; i < rings.length; i++) {
-      expect(rings[i].level - rings[i - 1].level).toBe(1);
-      expect(rings[i].fade).toBeGreaterThan(rings[i - 1].fade);
+  it('maskField: masked cells become Infinity, land cells untouched, input unmodified', () => {
+    const mask = Array.from({ length: cells }, (_, i) => (i % 3 === 0 ? '0' : '1')).join('');
+    const masked = maskField(total, mask);
+    for (let i = 0; i < 30; i++) {
+      if (i % 3 === 0) expect(masked[i]).toBe(Infinity);
+      else expect(masked[i]).toBe(total[i]);
     }
-    for (const r of rings) expect(r.index).toBe(r.level % 5 === 0);
-    // innermost ring sits just past the field minimum (~20-22 at the center cell)
-    expect(rings[0].level).toBeLessThanOrEqual(24);
+    expect(isFinite(total[0])).toBe(true); // original untouched
   });
 
-  it('empty on all-unreachable fields', () => {
-    const inf = new Float32Array(cells).fill(Infinity);
-    expect(personRings(inf, cgrid)).toEqual([]);
+  it('rings break at masked (water) cells: no segments inside a masked column', () => {
+    // mask a vertical strip of columns 18-21 (a "river" through the field)
+    const mask = Array.from({ length: cells }, (_, i) => {
+      const col = i % cgrid.cols;
+      return col >= 18 && col <= 21 ? '0' : '1';
+    }).join('');
+    const masked = maskField(total, mask);
+    const segs = contourSegments(masked, cgrid, 50);
+    expect(segs.length).toBeGreaterThan(0);
+    const lngAt = (colFrac: number) => cgrid.lngMin + (colFrac / cgrid.cols) * (cgrid.lngMax - cgrid.lngMin);
+    // strictly inside the masked strip (between centers of col 18 and 21) no crossings exist
+    for (const [p, q] of segs) {
+      for (const pt of [p, q]) {
+        expect(pt.lng <= lngAt(18.6) || pt.lng >= lngAt(20.4)).toBe(true);
+      }
+    }
   });
 });
 
