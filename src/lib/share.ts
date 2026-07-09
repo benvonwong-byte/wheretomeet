@@ -1,0 +1,71 @@
+import type { Pt, Mode, Daypart } from './types';
+
+// The URL hash IS the plan: pins, modes, dial, daypart, favorites.
+// #a=40.71430,-73.96140&b=...&la=245%20Varet...&am=sb&bm=sc&t=15&d=m&f=n123.w456
+export interface ShareState {
+  a?: Pt;
+  b?: Pt;
+  labelA?: string;
+  labelB?: string;
+  modesA?: Mode[];
+  modesB?: Mode[];
+  tolerance?: number;
+  daypart?: Daypart;
+  favs?: string[];
+}
+
+const MODE_CODE: Record<Mode, string> = { transit: 's', bike: 'b', car: 'c', walk: 'w' };
+const CODE_MODE: Record<string, Mode> = { s: 'transit', b: 'bike', c: 'car', w: 'walk' };
+const DAY_CODE: Record<Daypart, string> = { rush: 'r', midday: 'm', evening: 'e', night: 'n' };
+const CODE_DAY: Record<string, Daypart> = { r: 'rush', m: 'midday', e: 'evening', n: 'night' };
+
+const pt = (p: Pt) => `${p.lat.toFixed(5)},${p.lng.toFixed(5)}`;
+
+export function encodeShare(s: Required<Omit<ShareState, 'labelA' | 'labelB' | 'favs'>> & ShareState): string {
+  const parts = [
+    `a=${pt(s.a)}`,
+    `b=${pt(s.b)}`,
+    s.labelA ? `la=${encodeURIComponent(s.labelA)}` : '',
+    s.labelB ? `lb=${encodeURIComponent(s.labelB)}` : '',
+    `am=${s.modesA.map((m) => MODE_CODE[m]).join('')}`,
+    `bm=${s.modesB.map((m) => MODE_CODE[m]).join('')}`,
+    `t=${s.tolerance}`,
+    `d=${DAY_CODE[s.daypart]}`,
+    s.favs && s.favs.length ? `f=${s.favs.join('.')}` : '',
+  ];
+  return '#' + parts.filter(Boolean).join('&');
+}
+
+function parsePt(v: string | null): Pt | undefined {
+  if (!v) return undefined;
+  const [lat, lng] = v.split(',').map(Number);
+  if (!isFinite(lat) || !isFinite(lng)) return undefined;
+  if (lat < 39 || lat > 42 || lng < -76 || lng > -72) return undefined; // sanity: NYC-ish
+  return { lat, lng };
+}
+
+function parseModes(v: string | null): Mode[] | undefined {
+  if (!v) return undefined;
+  const modes = [...v].map((c) => CODE_MODE[c]).filter(Boolean);
+  return modes.length ? [...new Set(modes)] : undefined;
+}
+
+export function parseShare(hash: string): ShareState {
+  const out: ShareState = {};
+  const raw = hash.replace(/^#/, '');
+  if (!raw) return out;
+  const q = new URLSearchParams(raw);
+  out.a = parsePt(q.get('a'));
+  out.b = parsePt(q.get('b'));
+  out.labelA = q.get('la') ?? undefined;
+  out.labelB = q.get('lb') ?? undefined;
+  out.modesA = parseModes(q.get('am'));
+  out.modesB = parseModes(q.get('bm'));
+  const t = Number(q.get('t'));
+  if (isFinite(t) && t >= 0 && t <= 30) out.tolerance = Math.round(t / 5) * 5;
+  const d = q.get('d');
+  if (d && CODE_DAY[d]) out.daypart = CODE_DAY[d];
+  const f = q.get('f');
+  if (f) out.favs = f.split('.').filter((id) => /^[nwr]\d+$/.test(id));
+  return out;
+}

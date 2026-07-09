@@ -10,11 +10,13 @@ import { filterVenues } from './lib/venues';
 import { geocode, makeSuggester, type GeoHit } from './lib/geocode';
 import { routedMinutes, routedField, routedGeometry } from './lib/osrm';
 import { venueEmoji } from './lib/emoji';
-import { loadFavs, toggleFav } from './lib/favs';
+import { loadFavs, toggleFav, seedFavs } from './lib/favs';
+import { encodeShare, parseShare } from './lib/share';
 import type { Pt, Mode, Venue, ComboLayer, TimeField, SubwayData, Daypart } from './lib/types';
 
 // ── Static data ──────────────────────────────────────────────
 const VENUES = (venuesData as { venues: Venue[] }).venues;
+const VENUE_BY_ID = new Map(VENUES.map((v) => [v.id, v]));
 const SUBWAY = subwayData as unknown as SubwayData;
 const graphCache = new Map<Daypart, TransitGraph>();
 
@@ -57,6 +59,31 @@ const state = {
   tolerance: 15, // max acceptable minutes of deviation between the two travel times
   sortBy: 'best' as SortBy,
 };
+
+// Hydrate from a shared link — the URL hash IS the plan.
+const shared = parseShare(location.hash);
+if (shared.a) state.A.pt = shared.a;
+if (shared.b) state.B.pt = shared.b;
+if (shared.modesA) state.A.modes = new Set(shared.modesA);
+if (shared.modesB) state.B.modes = new Set(shared.modesB);
+if (shared.tolerance != null) state.tolerance = shared.tolerance;
+if (shared.daypart) state.daypart = shared.daypart;
+if (shared.favs?.length) seedFavs(state.A.pt, state.B.pt, shared.favs);
+
+function syncUrl(): void {
+  const hash = encodeShare({
+    a: state.A.pt,
+    b: state.B.pt,
+    labelA: (document.getElementById('addr-a') as HTMLInputElement).value || undefined,
+    labelB: (document.getElementById('addr-b') as HTMLInputElement).value || undefined,
+    modesA: [...state.A.modes],
+    modesB: [...state.B.modes],
+    tolerance: state.tolerance,
+    daypart: state.daypart,
+    favs: [...loadFavs(state.A.pt, state.B.pt)],
+  });
+  history.replaceState(null, '', hash);
+}
 
 const fieldCache = new Map<string, TimeField>();
 // Street modes upgrade from model estimates to real OSRM-routed fields, async.
@@ -749,6 +776,39 @@ function renderVenues(): void {
   }
 
   void refineVenues(candidates.map((x) => x.v));
+  renderShortlist(favs);
+  syncUrl();
+}
+
+// ── Shortlist panel (the shareable picks list) ───────────────
+function renderShortlist(favs: Set<string>): void {
+  const panel = document.getElementById('shortlist')!;
+  const list = document.getElementById('shortlist-items')!;
+  const items = [...favs].map((id) => VENUE_BY_ID.get(id)).filter((v): v is Venue => !!v);
+  panel.hidden = items.length === 0;
+  list.innerHTML = '';
+  for (const v of items) {
+    const s = scoreAtPoint(GRID, lastLayers, v);
+    const combos = s ? effectiveCombos(v, s.combos).combos : [];
+    const best = combos.length ? pickCombo(combos, state.sortBy) : null;
+    const li = document.createElement('li');
+    li.innerHTML =
+      `<span class="sl-name">${venueEmoji(v)} ${esc(v.name)}</span>` +
+      (best
+        ? `<span class="sl-times"><b class="ta">${Math.round(best.tA)}′</b>/<b class="tb">${Math.round(best.tB)}′</b></span>`
+        : '') +
+      `<button class="sl-remove" title="remove">✕</button>`;
+    li.querySelector<HTMLButtonElement>('.sl-remove')!.onclick = (e) => {
+      e.stopPropagation();
+      toggleFav(state.A.pt, state.B.pt, v.id);
+      renderVenues();
+    };
+    li.onclick = () => {
+      map.setView([v.lat, v.lng], Math.max(map.getZoom(), 14));
+      if (s) showDetail(v, effectiveCombos(v, s.combos).combos);
+    };
+    list.appendChild(li);
+  }
 }
 
 // ── Boot ─────────────────────────────────────────────────────
@@ -761,4 +821,24 @@ renderDietFilters();
 renderSortChips();
 wireInput('A');
 wireInput('B');
+
+// Restore shared-link UI state (labels, dial position).
+if (shared.labelA) (document.getElementById('addr-a') as HTMLInputElement).value = shared.labelA;
+if (shared.labelB) (document.getElementById('addr-b') as HTMLInputElement).value = shared.labelB;
+{
+  const slider = document.getElementById('bias') as HTMLInputElement;
+  slider.value = String(state.tolerance);
+  document.getElementById('bias-val')!.textContent = state.tolerance === 0 ? 'EQUAL TIMES' : `±${state.tolerance}′`;
+}
+
+document.getElementById('share-link')!.onclick = async () => {
+  syncUrl();
+  try {
+    await navigator.clipboard.writeText(location.href);
+    setStatus('Link copied — send it! 💌', 2400);
+  } catch {
+    setStatus('Copy blocked — grab the link from the address bar', 2800);
+  }
+};
+
 scheduleRecompute();

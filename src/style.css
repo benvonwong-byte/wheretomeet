@@ -891,10 +891,11 @@ body {
 .fav-btn {
   background: none;
   border: none;
-  color: var(--line);
-  font-size: 14px;
+  color: #cf9fb4;
+  font-size: 17px;
+  line-height: 1;
   cursor: pointer;
-  padding: 0 4px;
+  padding: 0 5px;
   transition: color 0.12s, transform 0.12s;
   vertical-align: baseline;
 }
@@ -906,6 +907,7 @@ body {
 
 .fav-btn.on {
   color: var(--hot);
+  text-shadow: 0 0 8px rgba(217, 79, 142, 0.45);
 }
 
 #venues .v-side {
@@ -947,4 +949,108 @@ body {
   line-height: 1.5;
   color: var(--dim);
   margin: 0 0 7px;
+}
+
+/* ── Shortlist (shareable picks) ──────── */
+#shortlist {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 1050;
+  width: 272px;
+  background: var(--rail);
+  border: 1px solid var(--line);
+  border-top: 4px solid var(--hot);
+  border-radius: 10px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.18);
+  padding: 14px 16px;
+}
+
+#shortlist h3 {
+  margin: 0 0 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--hot);
+}
+
+#shortlist-items {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+}
+
+#shortlist-items li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--line);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+#shortlist-items .sl-name {
+  flex: 1;
+  font-weight: 600;
+  color: var(--paper);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#shortlist-items .sl-times {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+#shortlist-items .sl-remove {
+  background: none;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+}
+
+#shortlist-items .sl-remove:hover {
+  color: var(--b);
+}
+
+#share-link {
+  width: 100%;
+  background: var(--hot);
+  color: #fff;
+  border: none;
+  border-radius: 7px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 9px 0;
+  cursor: pointer;
+  transition: filter 0.12s;
+}
+
+#share-link:hover {
+  filter: brightness(1.08);
+}
+
+.shortlist-hint {
+  margin: 8px 0 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+
+@media (max-width: 760px) {
+  #shortlist {
+    top: 12px;
+    right: 12px;
+    left: auto;
+    width: min(272px, 70vw);
+  }
 }

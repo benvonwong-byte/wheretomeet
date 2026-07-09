@@ -24,6 +24,19 @@ export function loadFavs(a: Pt, b: Pt): Set<string> {
   return read(storageKey(a, b));
 }
 
+/** Union venue ids (e.g. from a shared link) into the pair's favorites. */
+export function seedFavs(a: Pt, b: Pt, ids: string[]): Set<string> {
+  const key = storageKey(a, b);
+  const favs = read(key);
+  for (const id of ids) favs.add(id);
+  try {
+    localStorage.setItem(key, JSON.stringify([...favs]));
+  } catch {
+    /* non-persistent */
+  }
+  return favs;
+}
+
 /** Toggle a venue id; returns the updated set. */
 export function toggleFav(a: Pt, b: Pt, venueId: string): Set<string> {
   const key = storageKey(a, b);

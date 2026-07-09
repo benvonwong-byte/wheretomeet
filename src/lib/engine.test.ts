@@ -8,6 +8,7 @@ import { advantageColor } from './heat';
 import { venueEmoji } from './emoji';
 import { pairKey } from './favs';
 import { contourAt, contourLevels, buildContours } from './contours';
+import { encodeShare, parseShare } from './share';
 import type { SubwayData, Venue } from './types';
 
 describe('geo', () => {
@@ -304,6 +305,43 @@ describe('venue emoji + favorites', () => {
     const b = { lat: 40.787, lng: -73.9754 };
     expect(pairKey(a, b)).toBe(pairKey(b, a));
     expect(pairKey({ lat: 40.71449, lng: -73.96139 }, b)).toBe(pairKey(a, b)); // ~20m nudge
+  });
+});
+
+describe('share links', () => {
+  it('round-trips the full plan through the hash', () => {
+    const hash = encodeShare({
+      a: { lat: 40.7143, lng: -73.9614 },
+      b: { lat: 40.787, lng: -73.9754 },
+      labelA: '245 Varet Street, Brooklyn',
+      labelB: 'Flushing, Queens',
+      modesA: ['transit', 'bike'],
+      modesB: ['car'],
+      tolerance: 10,
+      daypart: 'evening',
+      favs: ['n123', 'w456'],
+    });
+    const s = parseShare(hash);
+    expect(s.a!.lat).toBeCloseTo(40.7143, 4);
+    expect(s.b!.lng).toBeCloseTo(-73.9754, 4);
+    expect(s.labelA).toBe('245 Varet Street, Brooklyn');
+    expect(s.modesA).toEqual(['transit', 'bike']);
+    expect(s.modesB).toEqual(['car']);
+    expect(s.tolerance).toBe(10);
+    expect(s.daypart).toBe('evening');
+    expect(s.favs).toEqual(['n123', 'w456']);
+  });
+
+  it('rejects junk: out-of-area coords, bad modes, malformed fav ids', () => {
+    const s = parseShare('#a=51.5,-0.1&am=zz&f=DROP.TABLE;--&t=999');
+    expect(s.a).toBeUndefined();
+    expect(s.modesA).toBeUndefined();
+    expect(s.favs).toEqual([]);
+    expect(s.tolerance).toBeUndefined();
+  });
+
+  it('empty hash → empty state', () => {
+    expect(parseShare('')).toEqual({});
   });
 });
 
