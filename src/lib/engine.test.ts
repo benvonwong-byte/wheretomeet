@@ -320,6 +320,21 @@ describe('venue emoji + favorites', () => {
 });
 
 describe('share links', () => {
+  it('solo (near-me) flag survives the round trip and defaults off', () => {
+    const hash = encodeShare({
+      a: { lat: 40.7143, lng: -73.9614 },
+      b: { lat: 40.7143, lng: -73.9614 },
+      modesA: ['walk'],
+      modesB: ['walk'],
+      bias: 0,
+      daypart: 'midday',
+      solo: true,
+    });
+    expect(hash).toContain('s=1');
+    expect(parseShare(hash).solo).toBe(true);
+    expect(parseShare('#a=40.71430,-73.96140&b=40.78700,-73.97540').solo).toBeUndefined();
+  });
+
   it('round-trips the full plan through the hash', () => {
     const hash = encodeShare({
       a: { lat: 40.7143, lng: -73.9614 },

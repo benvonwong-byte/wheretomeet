@@ -14,6 +14,7 @@ export interface ShareState {
   bias?: number;
   daypart?: Daypart;
   favs?: string[];
+  solo?: boolean; // near-me browsing: A only, B mirrors A until set
 }
 
 const MODE_CODE: Record<Mode, string> = { transit: 's', bike: 'b', car: 'c', walk: 'w' };
@@ -24,7 +25,7 @@ const CODE_DAY: Record<string, Daypart> = { r: 'rush', m: 'midday', e: 'evening'
 const pt = (p: Pt) => `${p.lat.toFixed(5)},${p.lng.toFixed(5)}`;
 
 export function encodeShare(
-  s: Required<Omit<ShareState, 'labelA' | 'labelB' | 'nameA' | 'nameB' | 'favs'>> & ShareState,
+  s: Required<Omit<ShareState, 'labelA' | 'labelB' | 'nameA' | 'nameB' | 'favs' | 'solo'>> & ShareState,
 ): string {
   const parts = [
     `a=${pt(s.a)}`,
@@ -38,6 +39,7 @@ export function encodeShare(
     `t=${s.bias}`,
     `d=${DAY_CODE[s.daypart]}`,
     s.favs && s.favs.length ? `f=${s.favs.join('.')}` : '',
+    s.solo ? 's=1' : '',
   ];
   return '#' + parts.filter(Boolean).join('&');
 }
@@ -75,5 +77,6 @@ export function parseShare(hash: string): ShareState {
   if (d && CODE_DAY[d]) out.daypart = CODE_DAY[d];
   const f = q.get('f');
   if (f) out.favs = f.split('.').filter((id) => /^[nwr]\d+$/.test(id));
+  if (q.get('s') === '1') out.solo = true;
   return out;
 }

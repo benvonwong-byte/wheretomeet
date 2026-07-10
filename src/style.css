@@ -20,6 +20,12 @@
   box-sizing: border-box;
 }
 
+/* The hidden attribute must always win — display:flex on a class silently
+   overrides the UA's [hidden] rule otherwise. */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body,
 #app {
@@ -1172,10 +1178,6 @@ body {
 }
 
 /* ── Emoji legend / type filter ───────── */
-.emoji-legend[hidden] {
-  display: none;
-}
-
 .emoji-legend {
   position: fixed;
   right: 16px;
@@ -1462,4 +1464,23 @@ body {
 
 .credits {
   line-height: 1.8;
+}
+
+/* ── Intro CTAs: near-me primary, duo secondary ── */
+.intro-duo {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 11px;
+  border: 2px solid var(--vegan);
+  border-radius: 999px;
+  background: transparent;
+  color: #47791a;
+  font: 600 14px var(--sans);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.intro-duo:hover {
+  background: #ecf6df;
 }
