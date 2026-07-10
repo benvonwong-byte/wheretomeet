@@ -153,8 +153,13 @@ function activeCombos(): { a: Mode; b: Mode }[] {
 }
 
 // ── Map ──────────────────────────────────────────────────────
+// innerWidth can transiently read 0 (webview boot) — default to desktop then.
+const VP_W = window.innerWidth || document.documentElement.clientWidth;
+const IS_MOBILE = VP_W > 0 && VP_W <= 760;
+const IS_TOUCH = window.matchMedia('(pointer: coarse)').matches;
+
 const map = L.map('map', { zoomControl: false }).setView([40.745, -73.96], 12);
-L.control.zoom({ position: 'bottomright' }).addTo(map);
+if (!IS_MOBILE) L.control.zoom({ position: 'bottomright' }).addTo(map); // touch pinches instead
 L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
   attribution: '© OpenStreetMap contributors © CARTO',
   maxZoom: 19,
@@ -531,6 +536,7 @@ let pendingVenuesOnly = true;
 
 function scheduleRecompute(venuesOnly = false): void {
   pendingVenuesOnly = pendingVenuesOnly && venuesOnly; // a full request never downgrades
+  updatePlanBar();
   window.clearTimeout(pending);
   setStatus(state.solo ? 'Finding spots near you…' : 'Computing fair zones…');
   pending = window.setTimeout(() => {
@@ -720,6 +726,13 @@ function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB
   detailEl.hidden = false;
   const headline = pickCombo(combos, state.sortBy);
   void drawRoutes(v, headline.modeA, headline.modeB);
+  if (IS_MOBILE) {
+    sheetTo('half');
+    map.panInside([v.lat, v.lng], {
+      paddingTopLeft: [24, 130],
+      paddingBottomRight: [24, Math.round(window.innerHeight * 0.55)],
+    });
+  }
   detailEl.querySelector<HTMLButtonElement>('.detail-close')!.onclick = closeDetail;
   detailEl.querySelector<HTMLButtonElement>('.detail-fav')!.onclick = () => {
     toggleFav(state.A.pt, state.B.pt, v.id);
@@ -888,7 +901,7 @@ function renderVenues(): void {
         iconAnchor: [13, 13],
       }),
     }).addTo(venueLayer);
-    pin.bindTooltip(tipHtml(v), { direction: 'top', offset: [0, -12], className: 'venue-tip' });
+    if (!IS_TOUCH && !IS_MOBILE) pin.bindTooltip(tipHtml(v), { direction: 'top', offset: [0, -12], className: 'venue-tip' });
     pin.on('click', () => showDetail(v, effectiveCombos(v, s.combos).combos));
 
     const li = document.createElement('li');
@@ -976,6 +989,172 @@ function renderShortlist(favs: Set<string>): void {
     };
     list.appendChild(li);
   }
+}
+
+
+// ── Mobile layout: full-screen map + bottom sheet ───────────
+// Patterns per Material 3 / Apple HIG / Google-Maps-style sheets: translateY
+// snaps (peek/half/full), one scrollable chip strip, plan pill that expands
+// to the address editor, locate FAB, no zoom buttons on touch.
+type SheetPos = 'peek' | 'half' | 'full';
+let sheetTo: (pos: SheetPos) => void = () => {};
+let planEditorOpen: (open: boolean) => void = () => {};
+let updatePlanBar: () => void = () => {};
+
+function buildMobileLayout(): void {
+  document.body.classList.add('m');
+  const rail = document.getElementById('rail')!;
+
+  const mtop = document.createElement('div');
+  mtop.id = 'mtop';
+  mtop.innerHTML =
+    '<div class="mtop-row">' +
+    '<button id="plan-bar"><span class="pb-brand">\u{1F33F}</span><span id="plan-sum"></span><span class="pb-caret">\u25BE</span></button>' +
+    '</div>' +
+    '<div id="mchips"></div>';
+  document.body.appendChild(mtop);
+  mtop.querySelector('.mtop-row')!.appendChild(document.getElementById('about-btn')!);
+  const chips = document.getElementById('mchips')!;
+  const findPanel = document.getElementById('diet-filters')!.closest('.panel') as HTMLElement;
+  chips.appendChild(document.getElementById('diet-filters')!);
+  chips.appendChild(document.getElementById('cat-filters')!);
+  chips.appendChild(document.getElementById('emoji-legend')!);
+  findPanel.style.display = 'none'; // emptied — its filters live in the strip now
+
+  const editor = document.createElement('div');
+  editor.id = 'plan-editor';
+  editor.hidden = true;
+  editor.appendChild(document.querySelector('.person[data-person="A"]')!);
+  editor.appendChild(document.querySelector('.person[data-person="B"]')!);
+  editor.appendChild(document.getElementById('tuning-panel')!);
+  const done = document.createElement('button');
+  done.id = 'plan-done';
+  done.textContent = 'Show results';
+  editor.appendChild(done);
+  document.body.appendChild(editor);
+
+  const handle = document.createElement('div');
+  handle.id = 'sheet-handle';
+  handle.innerHTML = '<div class="grip"></div>';
+  rail.prepend(handle);
+  rail.insertBefore(document.getElementById('detail')!, handle.nextSibling);
+  // Shortlist tucks under the list header so peek always leads with the count.
+  rail.querySelector('.venues-panel')!.insertBefore(document.getElementById('shortlist')!, document.getElementById('sort-chips'));
+
+  const fab = document.createElement('button');
+  fab.id = 'locate-fab';
+  fab.title = 'Use my location';
+  fab.textContent = '\u{1F4CD}';
+  fab.onclick = locateMe;
+  document.body.appendChild(fab);
+
+  map.attributionControl.setPosition('topright');
+  window.setTimeout(() => map.invalidateSize(), 60);
+
+  // Safe-area inset, readable only through a probe element.
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:fixed;visibility:hidden;padding-bottom:env(safe-area-inset-bottom,0px)';
+  document.body.appendChild(probe);
+  const safeBottom = parseFloat(getComputedStyle(probe).paddingBottom) || 0;
+  probe.remove();
+
+  const offsets = (): Record<SheetPos, number> => ({
+    full: mtop.offsetHeight + 8,
+    half: Math.round(window.innerHeight * 0.5),
+    peek: window.innerHeight - (100 + safeBottom),
+  });
+
+  let pos: SheetPos = 'peek';
+  sheetTo = (p: SheetPos) => {
+    pos = p;
+    rail.classList.add('snap');
+    rail.classList.toggle('at-full', p === 'full');
+    rail.style.transform = `translateY(${offsets()[p]}px)`;
+    fab.classList.toggle('gone', p !== 'peek');
+  };
+
+  // Drag: 1:1 follow on the handle + list header, velocity-aware snap.
+  let y0 = 0;
+  let o0 = 0;
+  let lastY = 0;
+  let lastT = 0;
+  let vel = 0;
+  let dragging = false;
+  const dragStart = (e: PointerEvent) => {
+    dragging = true;
+    y0 = e.clientY;
+    o0 = offsets()[pos];
+    lastY = e.clientY;
+    lastT = e.timeStamp;
+    rail.classList.remove('snap');
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const dragMove = (e: PointerEvent) => {
+    if (!dragging) return;
+    const off = offsets();
+    const next = Math.min(off.peek, Math.max(off.full, o0 + (e.clientY - y0)));
+    rail.style.transform = `translateY(${next}px)`;
+    const dt = e.timeStamp - lastT;
+    if (dt > 0) vel = (e.clientY - lastY) / dt;
+    lastY = e.clientY;
+    lastT = e.timeStamp;
+  };
+  const dragEnd = (e: PointerEvent) => {
+    if (!dragging) return;
+    dragging = false;
+    const off = offsets();
+    const cur = o0 + (e.clientY - y0);
+    let target: SheetPos;
+    if (Math.abs(vel) > 0.5) {
+      target = vel > 0 ? (pos === 'full' ? 'half' : 'peek') : pos === 'peek' ? 'half' : 'full';
+    } else {
+      target = (Object.keys(off) as SheetPos[]).reduce((a, b) =>
+        Math.abs(off[a] - cur) < Math.abs(off[b] - cur) ? a : b,
+      );
+    }
+    sheetTo(target);
+  };
+  for (const surf of [handle, document.getElementById('venues-head')!]) {
+    surf.addEventListener('pointerdown', dragStart);
+    surf.addEventListener('pointermove', dragMove);
+    surf.addEventListener('pointerup', dragEnd);
+    surf.addEventListener('pointercancel', dragEnd);
+  }
+  handle.onclick = () => {
+    if (Math.abs(vel) < 0.01) sheetTo(pos === 'peek' ? 'half' : pos === 'half' ? 'full' : 'peek');
+  };
+
+  planEditorOpen = (open: boolean) => {
+    editor.hidden = !open;
+    mtop.classList.toggle('editing', open);
+    if (open) sheetTo('peek');
+  };
+  (document.getElementById('plan-bar') as HTMLButtonElement).onclick = () => planEditorOpen(editor.hidden);
+  done.onclick = () => planEditorOpen(false);
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !editor.hidden) planEditorOpen(false);
+  });
+  map.on('click', () => {
+    planEditorOpen(false);
+    if (!detailEl.hidden) {
+      closeDetail();
+      sheetTo('peek');
+    }
+  });
+
+  updatePlanBar = () => {
+    const sum = document.getElementById('plan-sum')!;
+    const va = (document.getElementById('addr-a') as HTMLInputElement).value.trim();
+    const vb = (document.getElementById('addr-b') as HTMLInputElement).value.trim();
+    const mode = MODE_LABEL[[...state.A.modes][0]].toLowerCase();
+    sum.textContent = state.solo
+      ? `${va || 'Set your location'} \u00b7 ${mode}`
+      : `${personLabel('A')}: ${va || 'set address'} \u2194 ${personLabel('B')}: ${vb || 'set address'}`;
+  };
+
+  window.addEventListener('resize', () => sheetTo(pos));
+  sheetTo('half');
+  updatePlanBar();
 }
 
 // ── Solo mode: "what's vegan near me" — A only, B joins later ─
@@ -1085,6 +1264,7 @@ if (shared.labelB) (document.getElementById('addr-b') as HTMLInputElement).value
   updateBiasLabel();
 }
 
+if (IS_MOBILE) buildMobileLayout();
 if (shared.solo && shared.a) enterSolo(shared.a, shared.labelA ?? 'Shared location 📍', false);
 
 function applyNames(): void {

@@ -493,56 +493,6 @@ body {
 }
 
 /* mobile */
-@media (max-width: 760px) {
-  #app {
-    grid-template-columns: 1fr;
-    grid-template-rows: 48% 52%;
-  }
-
-  #rail {
-    order: 2;
-    border-right: none;
-    border-top: 1px solid var(--line);
-  }
-
-  #map {
-    order: 1;
-  }
-
-  /* iOS zooms the page when focused inputs are under 16px */
-  .person input {
-    font-size: 16px;
-  }
-
-  /* comfortable tap targets */
-  .mode-pill {
-    padding: 8px 12px;
-    font-size: 12px;
-  }
-
-  .chip {
-    padding: 8px 13px;
-  }
-
-  .fav-btn {
-    font-size: 20px;
-    padding: 0 7px;
-  }
-
-  .bias input[type='range'] {
-    height: 28px;
-  }
-
-  .brand {
-    padding: 14px 16px 12px;
-  }
-
-  .panel,
-  .person {
-    padding-left: 16px;
-    padding-right: 16px;
-  }
-}
 /* the sweet-spot bloom */
 .glow-img {
   filter: blur(4px) saturate(1.15);
@@ -741,15 +691,6 @@ body {
   color: var(--dim);
 }
 
-@media (max-width: 760px) {
-  #detail {
-    left: 12px;
-    right: 12px;
-    width: auto;
-    bottom: 12px;
-    max-height: 50vh;
-  }
-}
 
 /* ── Bias dial + dayparts ─────────────── */
 .bias {
@@ -1073,14 +1014,6 @@ body {
   color: var(--dim);
 }
 
-@media (max-width: 760px) {
-  #shortlist {
-    top: 12px;
-    right: 12px;
-    left: auto;
-    width: min(272px, 70vw);
-  }
-}
 
 /* ── Detail rating row ────────────────── */
 .detail-rating {
@@ -1215,19 +1148,6 @@ body {
   background: #ecf6df;
 }
 
-@media (max-width: 760px) {
-  .emoji-legend {
-    flex-direction: row;
-    overflow-x: auto;
-    overflow-y: hidden;
-    max-height: none;
-    max-width: calc(100vw - 24px);
-    left: 12px;
-    right: 12px;
-    bottom: auto;
-    top: calc(48% - 54px);
-  }
-}
 
 /* ── Intro / about overlay ────────────── */
 .about-btn {
@@ -1428,15 +1348,6 @@ body {
   color: var(--dim);
 }
 
-@media (max-width: 760px) {
-  .intro-card {
-    padding: 22px 18px 18px;
-  }
-
-  .intro-wordmark {
-    font-size: 30px;
-  }
-}
 
 /* ── Donation links (discrete, friendly) ── */
 .intro-donate {
@@ -1483,4 +1394,340 @@ body {
 
 .intro-duo:hover {
   background: #ecf6df;
+}
+
+/* ═══ Mobile: full-screen map + bottom sheet ═══════════════════
+   Layers: map (Leaflet, ≤1000) → top strip + FAB (1100) → sheet
+   (1200) → plan editor (1300) → intro (3000) → toast (1500). */
+@media (max-width: 760px) {
+  #app {
+    display: block;
+  }
+
+  #map {
+    position: fixed;
+    inset: 0;
+    height: 100vh;
+    height: 100dvh;
+  }
+
+  body {
+    overscroll-behavior: none;
+  }
+
+  /* ── Bottom sheet (the rail, translateY-snapped by JS) ── */
+  #rail {
+    position: fixed;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 100vh;
+    height: 100dvh;
+    z-index: 1200;
+    border: none;
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -8px 32px rgba(31, 38, 23, 0.22);
+    transform: translateY(50vh);
+    overflow: hidden;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  #rail.snap {
+    transition: transform 300ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  #rail.at-full {
+    overflow-y: auto;
+    border-radius: 0;
+  }
+
+  #sheet-handle {
+    padding: 8px 0 6px;
+    touch-action: none;
+    cursor: grab;
+  }
+
+  #sheet-handle .grip {
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--line);
+    margin: 0 auto;
+  }
+
+  #venues-head {
+    touch-action: none;
+  }
+
+  .brand,
+  #layers-panel {
+    display: none;
+  }
+
+  .venues-panel {
+    padding-top: 4px;
+  }
+
+  .panel,
+  .person {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .credits {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Detail lives inside the sheet as a section, not a floating card. */
+  #detail {
+    position: static;
+    width: auto;
+    max-height: none;
+    border: none;
+    border-bottom: 6px solid var(--rail-2);
+    border-top: 4px solid var(--amber);
+    border-radius: 0;
+    box-shadow: none;
+    animation: none;
+    overflow: visible;
+  }
+
+  .detail-img {
+    max-height: 150px;
+  }
+
+  /* Shortlist folds into the sheet above the list. */
+  #shortlist {
+    position: static;
+    width: auto;
+    border-radius: 0;
+    box-shadow: none;
+    border: none;
+    border-bottom: 1px solid var(--line);
+  }
+
+  /* ── Top strip: plan pill + one scrollable chip row ── */
+  #mtop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1100;
+    padding: calc(env(safe-area-inset-top, 0px) + 8px) 12px 0;
+    pointer-events: none; /* children re-enable — map pans between rows */
+  }
+
+  .mtop-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    pointer-events: auto;
+  }
+
+  #plan-bar {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 48px;
+    padding: 0 14px;
+    border: none;
+    border-radius: 24px;
+    background: var(--rail);
+    box-shadow: 0 1px 3px rgba(31, 38, 23, 0.3);
+    font: 600 13px var(--sans);
+    color: var(--paper);
+    cursor: pointer;
+    text-align: left;
+  }
+
+  #plan-sum {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .pb-brand {
+    font-size: 16px;
+  }
+
+  .pb-caret {
+    color: var(--dim);
+    font-size: 11px;
+    transition: transform 0.2s;
+  }
+
+  #mtop.editing .pb-caret {
+    transform: rotate(180deg);
+  }
+
+  .about-btn {
+    position: static;
+    width: 40px;
+    height: 40px;
+    flex: none;
+    border: none;
+    background: var(--rail);
+    box-shadow: 0 1px 3px rgba(31, 38, 23, 0.3);
+    font-size: 15px;
+    pointer-events: auto;
+  }
+
+  #mchips {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 8px;
+    align-items: center;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding: 10px 2px;
+    margin: 0 -12px;
+    padding-left: 12px;
+    padding-right: 12px;
+    pointer-events: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #mchips::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* the moved filter groups dissolve into the strip */
+  #mchips .filters {
+    display: contents;
+  }
+
+  #mchips .chip {
+    flex: none;
+    white-space: nowrap;
+    min-height: 38px;
+    padding: 8px 14px;
+    background: var(--rail);
+    box-shadow: 0 1px 3px rgba(31, 38, 23, 0.25);
+    border-color: transparent;
+  }
+
+  #mchips .chip.on {
+    border-color: var(--dim);
+  }
+
+  #mchips .emoji-legend {
+    position: static;
+    display: contents;
+  }
+
+  #mchips .emoji-legend .em {
+    flex: none;
+    min-height: 38px;
+    min-width: 42px;
+    background: var(--rail);
+    box-shadow: 0 1px 3px rgba(31, 38, 23, 0.25);
+    border-radius: 999px;
+  }
+
+  #mchips .emoji-legend .em.on {
+    border-color: var(--vegan);
+    background: #ecf6df;
+  }
+
+  /* ── Plan editor: expands under the pill ── */
+  #plan-editor {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + 60px);
+    left: 12px;
+    right: 12px;
+    z-index: 1300;
+    background: var(--rail);
+    border-radius: 14px;
+    box-shadow: 0 16px 48px rgba(31, 38, 23, 0.32);
+    max-height: calc(100dvh - 130px);
+    overflow-y: auto;
+  }
+
+  #plan-editor .person,
+  #plan-editor .panel {
+    border-bottom: 1px solid var(--line);
+  }
+
+  #plan-done {
+    display: block;
+    width: calc(100% - 32px);
+    margin: 12px 16px 14px;
+    padding: 12px;
+    border: none;
+    border-radius: 999px;
+    background: var(--vegan);
+    color: #fff;
+    font: 700 14px var(--sans);
+    cursor: pointer;
+  }
+
+  /* ── Locate FAB, above the peek ── */
+  #locate-fab {
+    position: fixed;
+    right: 16px;
+    bottom: calc(116px + env(safe-area-inset-bottom, 0px));
+    z-index: 1100;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    border: none;
+    background: var(--rail);
+    box-shadow: 0 2px 8px rgba(31, 38, 23, 0.3);
+    font-size: 20px;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+
+  #locate-fab.gone {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* map chrome */
+  .leaflet-top.leaflet-right .leaflet-control-attribution {
+    margin-top: calc(env(safe-area-inset-top, 0px) + 110px);
+    font-size: 9px;
+    background: rgba(255, 255, 255, 0.75);
+  }
+
+  #status {
+    top: calc(env(safe-area-inset-top, 0px) + 112px);
+    bottom: auto;
+    z-index: 1500;
+  }
+
+  /* iOS zooms the page when focused inputs are under 16px */
+  .person input {
+    font-size: 16px;
+  }
+
+  .mode-pill {
+    padding: 9px 13px;
+    font-size: 12px;
+  }
+
+  .chip {
+    padding: 8px 13px;
+  }
+
+  .fav-btn {
+    font-size: 20px;
+    padding: 0 7px;
+  }
+
+  .bias input[type='range'] {
+    height: 28px;
+  }
+
+  .intro-card {
+    padding: 22px 18px 18px;
+  }
+
+  .intro-wordmark {
+    font-size: 30px;
+  }
 }
