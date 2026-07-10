@@ -1180,6 +1180,9 @@ function soloUi(on: boolean): void {
   (document.getElementById('addr-b') as HTMLInputElement).placeholder = on
     ? 'Add a friend to meet in the middle…'
     : 'Person B address…';
+  (document.getElementById('addr-a') as HTMLInputElement).placeholder = on
+    ? '📍 Your location or an address…'
+    : 'Person A address…';
 }
 
 function enterSolo(pt: Pt, label: string, forceWalk: boolean): void {
@@ -1244,7 +1247,13 @@ document.getElementById('about-btn')!.onclick = () => {
   introEl.hidden = false;
 };
 document.getElementById('intro-x')!.onclick = hideIntro;
-document.getElementById('intro-go')!.onclick = hideIntro;
+document.getElementById('intro-go')!.onclick = () => {
+  // "Plan a meetup" → stay in solo but point them at Person B; typing an
+  // address there flips to the duo fair-zone view (applyLocation → exitSolo).
+  hideIntro();
+  planEditorOpen(true); // no-op on desktop; opens the sheet editor on mobile
+  (document.getElementById('addr-b') as HTMLInputElement).focus();
+};
 document.getElementById('intro-near')!.onclick = () => {
   hideIntro();
   locateMe();
@@ -1281,10 +1290,11 @@ if (shared.labelB) (document.getElementById('addr-b') as HTMLInputElement).value
 if (IS_MOBILE) buildMobileLayout();
 if (shared.solo && shared.a) {
   enterSolo(shared.a, shared.labelA ?? 'Shared location 📍', false);
-} else if (IS_MOBILE && !shared.a && !shared.b) {
-  // Mobile first view = what's nearby. Solo at the default pin right away;
-  // recenter on the real location (the intro CTA is the first-visit gesture,
-  // returning visitors get the browser prompt / prior grant).
+} else if (!shared.a && !shared.b) {
+  // First view (desktop + mobile) = what's nearby: solo at the default pin so
+  // Person A is never an empty prompt. Recenter on the real location — the
+  // intro CTA is the first-visit gesture, returning visitors get the browser
+  // prompt / a prior grant.
   enterSolo(state.A.pt, '', true);
   if (localStorage.getItem('w2m:intro')) locateMe();
 }
