@@ -572,32 +572,34 @@ let heatOverlay: L.ImageOverlay | null = null;
 let shownVenueCells: number[] = []; // grid cells of the currently listed venues
 
 function drawContours(): void {
-  // Solo browsing: pins speak for themselves — advantage heat is meaningless
-  // (gap ≡ 0) and floods the zoomed-in viewport.
-  if (state.solo) {
-    if (heatOverlay) {
-      map.removeLayer(heatOverlay);
-      heatOverlay = null;
-    }
-    return;
-  }
   if (lastLayers.length === 0) return;
-  const minA = maskField(minPersonField(lastLayers, 'A', CELLS), LANDMASK);
-  const minB = maskField(minPersonField(lastLayers, 'B', CELLS), LANDMASK);
   const gap = new Float32Array(CELLS);
-  for (let i = 0; i < CELLS; i++) {
-    gap[i] = minA[i] - minB[i];
+  const minA = maskField(minPersonField(lastLayers, 'A', CELLS), LANDMASK);
+  if (state.solo) {
+    // Advantage is meaningless solo (gap ≡ 0) — the glow becomes a closeness
+    // gradient instead: green ≤5′ from you, yellow ~15′, purple 25′+.
+    for (let i = 0; i < CELLS; i++) {
+      const t = minA[i];
+      gap[i] = isFinite(t) ? Math.max(-14, Math.min(14, ((t - 15) / 10) * 14)) : 14;
+    }
+  } else {
+    const minB = maskField(minPersonField(lastLayers, 'B', CELLS), LANDMASK);
+    for (let i = 0; i < CELLS; i++) {
+      gap[i] = minA[i] - minB[i];
+    }
   }
 
-  const url = renderHeat(gap, shownVenueCells, GRID, state.bias).toDataURL();
-  if (heatOverlay) heatOverlay.setUrl(url);
-  else {
+  const url = renderHeat(gap, shownVenueCells, GRID, state.solo ? 0 : state.bias).toDataURL();
+  if (!heatOverlay) {
     heatOverlay = L.imageOverlay(url, HEAT_BOUNDS, {
       opacity: 0.78,
       className: 'glow-img',
       interactive: false,
     }).addTo(map);
+  } else {
+    heatOverlay.setUrl(url);
   }
+  heatOverlay.setOpacity(state.solo ? 0.4 : 0.78); // whisper-light under a zoomed-in view
 }
 
 // ── Venues ───────────────────────────────────────────────────
@@ -1048,6 +1050,16 @@ function buildMobileLayout(): void {
   fab.onclick = locateMe;
   document.body.appendChild(fab);
 
+  // Solo-only invitation to go duo — opens the editor on Person B.
+  const bInvite = document.createElement('button');
+  bInvite.id = 'b-invite';
+  bInvite.innerHTML = '\u{1F465} Meeting someone? <b>Add their spot</b>';
+  bInvite.onclick = () => {
+    planEditorOpen(true);
+    (document.getElementById('addr-b') as HTMLInputElement).focus();
+  };
+  mtop.appendChild(bInvite);
+
   map.attributionControl.setPosition('topright');
   window.setTimeout(() => map.invalidateSize(), 60);
 
@@ -1150,6 +1162,7 @@ function buildMobileLayout(): void {
     sum.textContent = state.solo
       ? `${va || 'Set your location'} \u00b7 ${mode}`
       : `${personLabel('A')}: ${va || 'set address'} \u2194 ${personLabel('B')}: ${vb || 'set address'}`;
+    bInvite.hidden = !state.solo;
   };
 
   window.addEventListener('resize', () => sheetTo(pos));
@@ -1189,6 +1202,7 @@ function enterSolo(pt: Pt, label: string, forceWalk: boolean): void {
   renderModes('A');
   closeDetail();
   map.setView(pt, 15);
+  if (IS_MOBILE) sheetTo('peek'); // nearby-first: the map and its glow lead
   coverageWarning('A');
   scheduleRecompute();
 }
@@ -1265,7 +1279,15 @@ if (shared.labelB) (document.getElementById('addr-b') as HTMLInputElement).value
 }
 
 if (IS_MOBILE) buildMobileLayout();
-if (shared.solo && shared.a) enterSolo(shared.a, shared.labelA ?? 'Shared location 📍', false);
+if (shared.solo && shared.a) {
+  enterSolo(shared.a, shared.labelA ?? 'Shared location 📍', false);
+} else if (IS_MOBILE && !shared.a && !shared.b) {
+  // Mobile first view = what's nearby. Solo at the default pin right away;
+  // recenter on the real location (the intro CTA is the first-visit gesture,
+  // returning visitors get the browser prompt / prior grant).
+  enterSolo(state.A.pt, '', true);
+  if (localStorage.getItem('w2m:intro')) locateMe();
+}
 
 function applyNames(): void {
   const ba = document.getElementById('bullet-a')!;

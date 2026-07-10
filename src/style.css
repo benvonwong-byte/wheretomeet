@@ -1731,3 +1731,25 @@ body {
     font-size: 30px;
   }
 }
+
+@media (max-width: 760px) {
+  #b-invite {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 2px;
+    padding: 8px 14px;
+    border: none;
+    border-radius: 999px;
+    background: var(--rail);
+    box-shadow: 0 1px 3px rgba(31, 38, 23, 0.25);
+    font: 500 12px var(--sans);
+    color: var(--text);
+    cursor: pointer;
+    pointer-events: auto;
+  }
+
+  #b-invite b {
+    color: #47791a;
+  }
+}
