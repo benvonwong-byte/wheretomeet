@@ -1753,3 +1753,119 @@ body {
     color: #47791a;
   }
 }
+
+/* ── Submit a spot ────────────────────── */
+.add-spot {
+  display: block;
+  width: 100%;
+  margin: 10px 0 4px;
+  padding: 11px;
+  border: 1.5px dashed var(--vegan);
+  border-radius: 12px;
+  background: transparent;
+  color: #47791a;
+  font: 600 12.5px var(--sans);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.add-spot:hover {
+  background: #ecf6df;
+}
+
+.submit-card {
+  width: min(460px, 100%);
+}
+
+.submit-title {
+  margin: 0 0 6px;
+  font-family: 'Fraunces', serif;
+  font-weight: 640;
+  font-size: 27px;
+  color: var(--paper);
+}
+
+.submit-title span {
+  color: var(--vegan);
+}
+
+.submit-sub {
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.submit-label {
+  display: block;
+  margin: 0 0 5px;
+  font: 600 10px var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.submit-input {
+  width: 100%;
+  margin-bottom: 14px;
+  padding: 11px 12px;
+  background: var(--rail-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: 400 16px var(--sans);
+  color: var(--text);
+  outline: none;
+}
+
+.submit-input:focus {
+  border-color: var(--amber);
+}
+
+.submit-seg {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.submit-seg button {
+  flex: 1;
+  min-width: fit-content;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dim);
+  font: 600 12px var(--sans);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.12s;
+}
+
+.submit-seg button.on {
+  background: #ecf6df;
+  border-color: var(--vegan);
+  color: #47791a;
+}
+
+.submit-msg {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: #fde8e8;
+  color: #a3352f;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.sub-done-check {
+  margin: 4px 0 8px;
+  font-size: 40px;
+  text-align: center;
+}
+
+#sub-done .intro-go {
+  text-decoration: none;
+  text-align: center;
+  display: block;
+}

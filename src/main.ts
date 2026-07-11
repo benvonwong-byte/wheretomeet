@@ -1,6 +1,7 @@
 import L from 'leaflet';
 import './style.css';
 import venuesData from './data/venues.json';
+import supplementData from './data/supplement.json';
 import subwayData from './data/subway.json';
 import { NYC_GRID, pointToCell } from './lib/geo';
 import { carDaypartMin } from './lib/modes';
@@ -15,10 +16,30 @@ import { routedMinutes, routedField, routedGeometry } from './lib/osrm';
 import { venueEmoji } from './lib/emoji';
 import { loadFavs, toggleFav, seedFavs } from './lib/favs';
 import { encodeShare, parseShare } from './lib/share';
+import { parseMapLink, validateSubmission } from './lib/submit';
 import type { Pt, Mode, Venue, ComboLayer, TimeField, SubwayData, Daypart } from './lib/types';
 
 // ── Static data ──────────────────────────────────────────────
-const VENUES = (venuesData as { venues: Venue[] }).venues;
+// venues.json = OSM-baked; supplement.json = hand-curated non-OSM spots;
+// localStorage = this visitor's own community submissions. All one pool.
+const SUBMIT_KEY = 'w2m:submitted';
+function loadSubmitted(): Venue[] {
+  try {
+    const arr = JSON.parse(localStorage.getItem(SUBMIT_KEY) ?? '[]');
+    if (!Array.isArray(arr)) return [];
+    // Drop malformed rows (hand-edited storage / old schema) so boot can't crash.
+    return arr.filter(
+      (v) => v && typeof v.id === 'string' && typeof v.name === 'string' && typeof v.lat === 'number' && typeof v.lng === 'number',
+    );
+  } catch {
+    return [];
+  }
+}
+const VENUES: Venue[] = [
+  ...(venuesData as { venues: Venue[] }).venues,
+  ...(supplementData as { venues: Venue[] }).venues,
+  ...loadSubmitted(),
+];
 const VENUE_BY_ID = new Map(VENUES.map((v) => [v.id, v]));
 const SUBWAY = subwayData as unknown as SubwayData;
 const graphCache = new Map<Daypart, TransitGraph>();
@@ -54,7 +75,7 @@ const state = {
   B: { pt: { lat: 40.787, lng: -73.9754 }, modes: new Set<Mode>(['transit']) } as Person,
   emojiFilter: new Set<string>(),
   cats: new Set<Venue['cat']>(['restaurant', 'cafe', 'activity']),
-  veganOnly: false,
+  veganOnly: true, // show fully-vegan AND vegan-friendly by default (the whole vegan universe)
   veganFriendly: true,
   teaHouse: true,
   bubbleTea: false,
@@ -1267,7 +1288,114 @@ window.addEventListener('keydown', (e) => {
 // First visit only — and never over a shared plan someone sent you.
 if (!localStorage.getItem(INTRO_SEEN) && !shared.a && !shared.b) introEl.hidden = false;
 
+// ── Submit a missing spot ────────────────────────────────────
+function saveSubmitted(list: Venue[]): void {
+  localStorage.setItem(SUBMIT_KEY, JSON.stringify(list));
+}
+
+function buildSubmitUi(): void {
+  const modal = document.getElementById('submit-modal')!;
+  const nameEl = document.getElementById('sub-name') as HTMLInputElement;
+  const locEl = document.getElementById('sub-loc') as HTMLInputElement;
+  const msgEl = document.getElementById('sub-msg')!;
+  const goEl = document.getElementById('sub-go') as HTMLButtonElement;
+  const formEl = document.getElementById('sub-form')!;
+  const doneEl = document.getElementById('sub-done')!;
+  let vegan: 1 | 2 = 2;
+  let cat: Venue['cat'] = 'restaurant';
+
+  const seg = (id: string, pick: (val: string) => void) => {
+    const box = document.getElementById(id)!;
+    box.querySelectorAll('button').forEach((b) =>
+      b.addEventListener('click', () => {
+        box.querySelectorAll('button').forEach((x) => x.classList.remove('on'));
+        b.classList.add('on');
+        pick(b.dataset.val!);
+      }),
+    );
+  };
+  seg('sub-vegan', (v) => (vegan = v === '1' ? 1 : 2));
+  seg('sub-cat', (c) => (cat = c as Venue['cat']));
+
+  const msg = (t: string) => {
+    msgEl.textContent = t;
+    msgEl.hidden = !t;
+  };
+  const open = () => {
+    formEl.hidden = false;
+    doneEl.hidden = true;
+    msg('');
+    modal.hidden = false;
+    nameEl.focus();
+  };
+  const close = () => {
+    modal.hidden = true;
+  };
+  document.getElementById('add-spot')!.onclick = open;
+  document.getElementById('submit-x')!.onclick = close;
+  modal.onclick = (e) => {
+    if (e.target === modal) close();
+  };
+
+  goEl.onclick = async () => {
+    const name = nameEl.value.trim();
+    const locRaw = locEl.value.trim();
+    if (!name) return msg('What’s the spot called?');
+    if (!locRaw) return msg('Add its address or paste a Google Maps link.');
+
+    let pt = parseMapLink(locRaw);
+    let addr = pt ? '' : locRaw;
+    if (!pt) {
+      goEl.disabled = true;
+      goEl.textContent = 'Checking…';
+      const hit = await geocode(locRaw);
+      goEl.disabled = false;
+      goEl.textContent = 'Check & add';
+      if (!hit) return msg('Couldn’t find that address — add the borough, or paste a Google Maps link.');
+      pt = hit.pt;
+      addr = hit.label;
+    }
+
+    const res = validateSubmission({ name, pt, vegan, cat, addr }, VENUES);
+    if (!res.ok) return msg(res.reason);
+
+    // Passed the checks → into the mix (live + persisted on this device).
+    VENUES.push(res.venue);
+    VENUE_BY_ID.set(res.venue.id, res.venue);
+    const stored = loadSubmitted();
+    stored.push(res.venue);
+    saveSubmitted(stored);
+
+    // Make sure it can actually show: enable its diet class + category, clear
+    // any narrowing emoji filter, then recompute and fly to it.
+    state.cats.add(res.venue.cat);
+    if (res.venue.vegan === 2) state.veganOnly = true;
+    else state.veganFriendly = true;
+    state.emojiFilter.clear();
+    state.glutenFree = false; // submitted spots carry no gf tag; GF would hide them
+    renderCatFilters();
+    renderDietFilters();
+    scheduleRecompute(true);
+    map.setView([res.venue.lat, res.venue.lng], 15);
+
+    // Success panel + a one-tap way to get it added for everyone.
+    const payload = JSON.stringify({ name: res.venue.name, lat: res.venue.lat, lng: res.venue.lng, vegan, cat, addr }, null, 2);
+    const mail =
+      `mailto:hi@vonwong.com?subject=${encodeURIComponent('Thyme & Place — new vegan spot')}` +
+      `&body=${encodeURIComponent(`Please add this spot for everyone:\n\n${res.venue.name}\n${addr}\n\n${payload}`)}`;
+    (document.getElementById('sub-mail') as HTMLAnchorElement).href = mail;
+    (document.getElementById('sub-done-name') as HTMLElement).textContent = res.venue.name;
+    formEl.hidden = true;
+    doneEl.hidden = false;
+    nameEl.value = '';
+    locEl.value = '';
+  };
+
+  document.getElementById('sub-close')!.onclick = close;
+}
+
 // ── Boot ─────────────────────────────────────────────────────
+buildSubmitUi();
 renderModes('A');
 renderModes('B');
 renderDayparts();

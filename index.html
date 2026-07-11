@@ -144,6 +144,7 @@
           <h2 id="venues-head">Best spots</h2>
           <div class="filters" id="sort-chips"></div>
           <ol id="venues"></ol>
+          <button id="add-spot" class="add-spot">🌱 Know a vegan spot we're missing? Add it</button>
         </section>
 
         <footer class="credits">
@@ -201,6 +202,38 @@
           <a href="https://account.venmo.com/u/benvonwong" target="_blank" rel="noopener">☕ buy Ben a matcha</a> — thank you! 💚
         </p>
         <p class="intro-fine">Free &amp; no signup · Data © OpenStreetMap · Ratings by Google · Times are honest estimates, not gospel</p>
+      </div>
+    </div>
+    <div id="submit-modal" class="intro" hidden>
+      <div class="intro-card submit-card" role="dialog" aria-modal="true" aria-label="Add a vegan spot">
+        <button class="intro-x" id="submit-x" aria-label="Close">×</button>
+        <div id="sub-form">
+          <p class="intro-hello">SPOTTED ONE WE MISSED?</p>
+          <h2 class="submit-title">Add a vegan spot</h2>
+          <p class="submit-sub">We'll double-check it's real, inside NYC, and not already on the map — then drop it on yours.</p>
+          <label class="submit-label" for="sub-name">Name</label>
+          <input id="sub-name" class="submit-input" type="text" placeholder="e.g. Tenon Vegan Sushi" autocomplete="off" />
+          <label class="submit-label" for="sub-loc">Address or Google Maps link</label>
+          <input id="sub-loc" class="submit-input" type="text" placeholder="329 Flatbush Ave — or paste a maps link" autocomplete="off" />
+          <div class="submit-seg" id="sub-vegan">
+            <button data-val="2" class="on">🌱 Fully vegan</button>
+            <button data-val="1">🌿 Vegan-friendly</button>
+          </div>
+          <div class="submit-seg" id="sub-cat">
+            <button data-val="restaurant" class="on">🍽️ Restaurant</button>
+            <button data-val="cafe">☕ Café</button>
+            <button data-val="activity">🎳 Activity</button>
+          </div>
+          <p id="sub-msg" class="submit-msg" hidden></p>
+          <button id="sub-go" class="intro-go">Check &amp; add</button>
+        </div>
+        <div id="sub-done" hidden>
+          <p class="sub-done-check">✅</p>
+          <h2 class="submit-title"><span id="sub-done-name"></span> is on your map!</h2>
+          <p class="submit-sub">Thanks for the tip. Want everyone to see it? Send it over and we'll verify &amp; add it for all.</p>
+          <a id="sub-mail" class="intro-go" href="#">📧 Email it to Ben to add for everyone</a>
+          <button id="sub-close" class="intro-duo">Done</button>
+        </div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

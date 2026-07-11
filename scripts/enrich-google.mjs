@@ -28,7 +28,7 @@ if (!KEY) {
 
 const ALL = process.argv.includes('--all');
 const WANT_DESC = process.argv.includes('--desc');
-const FILE = 'src/data/venues.json';
+const FILE = process.argv.find((a) => a.startsWith('--file='))?.slice('--file='.length) || 'src/data/venues.json';
 const data = JSON.parse(readFileSync(FILE, 'utf8'));
 
 const subset = data.venues.filter((v) => (ALL ? true : v.vegan > 0 || v.tea));

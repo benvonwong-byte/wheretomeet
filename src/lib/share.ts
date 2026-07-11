@@ -76,7 +76,7 @@ export function parseShare(hash: string): ShareState {
   const d = q.get('d');
   if (d && CODE_DAY[d]) out.daypart = CODE_DAY[d];
   const f = q.get('f');
-  if (f) out.favs = f.split('.').filter((id) => /^[nwr]\d+$/.test(id));
+  if (f) out.favs = f.split('.').filter((id) => /^[nwrs]\d+$/.test(id)); // n/w/r = OSM, s = supplement
   if (q.get('s') === '1') out.solo = true;
   return out;
 }

@@ -335,6 +335,11 @@ describe('share links', () => {
     expect(parseShare('#a=40.71430,-73.96140&b=40.78700,-73.97540').solo).toBeUndefined();
   });
 
+  it('keeps supplement (s-prefixed) fav ids so curated non-OSM spots stay shareable', () => {
+    const s = parseShare('#a=40.71430,-73.96140&b=40.78700,-73.97540&f=s1.n42.junk.s2');
+    expect(s.favs).toEqual(['s1', 'n42', 's2']);
+  });
+
   it('round-trips the full plan through the hash', () => {
     const hash = encodeShare({
       a: { lat: 40.7143, lng: -73.9614 },
