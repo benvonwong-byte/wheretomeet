@@ -362,6 +362,21 @@ describe('share links', () => {
     expect(s.lambda).toBeCloseTo(0.4, 5);
   });
 
+  it('a name with the p= delimiters (, ;) does not split into a fake extra person', () => {
+    const hash = encodeShare({
+      a: { lat: 40.7143, lng: -73.9614 },
+      b: { lat: 40.787, lng: -73.9754 },
+      modesA: ['walk'],
+      modesB: ['walk'],
+      bias: 0,
+      daypart: 'midday',
+      extra: [{ pt: { lat: 40.7036, lng: -73.9264 }, mode: 'transit', name: 'A; 40.7,-73.9,b,X' }],
+    });
+    const s = parseShare(hash);
+    expect(s.extra?.length).toBe(1); // no injected second person
+    expect(s.extra![0].pt.lat).toBeCloseTo(40.7036, 4);
+  });
+
   it('an old a=/b=/t= link ignores group params and loads as 2-person', () => {
     const s = parseShare('#a=40.71430,-73.96140&b=40.78700,-73.97540&am=s&bm=c&t=10&d=m');
     expect(s.a).toBeDefined();

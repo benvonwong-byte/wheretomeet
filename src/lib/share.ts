@@ -44,7 +44,9 @@ export function encodeShare(
     s.solo ? 's=1' : '',
     // People beyond A/B (group). a=/b= stay for back-compat; p= carries the rest.
     s.extra && s.extra.length
-      ? `p=${s.extra.map((e) => `${pt(e.pt)},${MODE_CODE[e.mode]},${encodeURIComponent(e.name)}`).join(';')}`
+      ? // ',' and ';' are the p= delimiters — URLSearchParams decodes %-escapes
+        // before our own split, so strip them from the (cosmetic) name.
+        `p=${s.extra.map((e) => `${pt(e.pt)},${MODE_CODE[e.mode]},${encodeURIComponent(e.name.replace(/[,;]/g, ' '))}`).join(';')}`
       : '',
     s.extra && s.extra.length && s.lambda != null ? `l=${Math.round(s.lambda * 100)}` : '',
   ];

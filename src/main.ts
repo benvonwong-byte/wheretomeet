@@ -646,11 +646,10 @@ let lastGroup: GroupLayer | null = null;
 
 function recompute(venuesOnly: boolean): void {
   if (groupMode()) {
-    if (!venuesOnly || !lastGroup) {
-      const fields = state.people.map((p, i) => getField(i, [...p.modes][0]));
-      lastGroup = groupLayer(fields, state.lambda);
-      lastLayers = [];
-    }
+    // Always rebuild: fields are cached (cheap) and the glow must track λ.
+    const fields = state.people.map((p, i) => getField(i, [...p.modes][0]));
+    lastGroup = groupLayer(fields, state.lambda);
+    lastLayers = [];
   } else if (!venuesOnly || lastLayers.length === 0) {
     lastGroup = null;
     const combos = activeCombos();
@@ -899,7 +898,7 @@ async function refineVenues(venues: Venue[]): Promise<void> {
       const daypart = state.daypart;
       jobs.push(
         routedMinutes(state.people[idx].pt, missing, mode).then((mins) => {
-          if (!mins) return;
+          if (!mins || token !== refineToken || !exactCache[idx]) return; // person removed / stale
           missing.forEach((v, k) => {
             const t = mins[k];
             const val = mode === 'car' && t != null ? carDaypartMin(t, daypart) : t;
@@ -1255,8 +1254,9 @@ function renderShortlist(favs: Set<string>): void {
     const best = combos.length ? pickCombo(combos, state.sortBy) : null;
     const gtimes = group ? groupVenueTimes(v) : null;
     const li = document.createElement('li');
+    const gworst = group ? Math.max(...gtimes!) : 0;
     const times = group
-      ? `<span class="sl-times"><b class="ta">${Math.round(Math.max(...gtimes!))}′</b></span>`
+      ? `<span class="sl-times"><b class="ta">${isFinite(gworst) ? Math.round(gworst) + '′' : '—'}</b></span>`
       : best
         ? `<span class="sl-times">${state.solo ? `<b class="ta">${Math.round(best.tA)}′</b>` : `<b class="ta">${Math.round(best.tA)}′</b>/<b class="tb">${Math.round(best.tB)}′</b>`}</span>`
         : '';
@@ -1482,6 +1482,11 @@ const soloUi = (_on: boolean): void => syncModeUi();
 
 function enterSolo(pt: Pt, label: string, forceWalk: boolean): void {
   state.people.length = 2; // collapse any group back to A/B before going near-me
+  while (markers.length > 2) map.removeLayer(markers.pop()!); // drop orphan C/D/E pins
+  exactCache.length = 2;
+  lastGroup = null;
+  refineToken++; // invalidate any in-flight group refine
+  renderExtraPeople(); // clear the group rows from the DOM
   state.solo = true;
   state.people[0].pt = pt;
   state.people[1].pt = pt;
@@ -1782,6 +1787,7 @@ function removePerson(i: number): void {
   exactCache.splice(i, 1);
   fieldCache.clear(); // index-keyed keys are now stale (indices shifted down)
   fieldUpgrades.clear();
+  refineToken++; // any in-flight refine now targets a wrong/removed index
   lastGroup = null;
   renderExtraPeople();
   applyNames();
