@@ -340,6 +340,37 @@ describe('share links', () => {
     expect(s.favs).toEqual(['s1', 'n42', 's2']);
   });
 
+  it('round-trips a 3+ person group plan (p= extras + l= lambda)', () => {
+    const hash = encodeShare({
+      a: { lat: 40.7143, lng: -73.9614 },
+      b: { lat: 40.787, lng: -73.9754 },
+      modesA: ['walk'],
+      modesB: ['transit'],
+      bias: 0,
+      daypart: 'midday',
+      extra: [
+        { pt: { lat: 40.7036, lng: -73.9264 }, mode: 'transit', name: 'Sam' },
+        { pt: { lat: 40.75, lng: -73.99 }, mode: 'bike', name: '' },
+      ],
+      lambda: 0.4,
+    });
+    const s = parseShare(hash);
+    expect(s.extra?.length).toBe(2);
+    expect(s.extra![0].name).toBe('Sam');
+    expect(s.extra![0].mode).toBe('transit');
+    expect(s.extra![1].pt.lat).toBeCloseTo(40.75, 4);
+    expect(s.lambda).toBeCloseTo(0.4, 5);
+  });
+
+  it('an old a=/b=/t= link ignores group params and loads as 2-person', () => {
+    const s = parseShare('#a=40.71430,-73.96140&b=40.78700,-73.97540&am=s&bm=c&t=10&d=m');
+    expect(s.a).toBeDefined();
+    expect(s.b).toBeDefined();
+    expect(s.extra).toBeUndefined();
+    expect(s.lambda).toBeUndefined();
+    expect(s.bias).toBe(10);
+  });
+
   it('round-trips the full plan through the hash', () => {
     const hash = encodeShare({
       a: { lat: 40.7143, lng: -73.9614 },

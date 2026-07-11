@@ -137,6 +137,12 @@ if (shared.modesB?.length) state.B.modes = new Set([pickMode(shared.modesB)]);
 if (shared.nameA) state.nameA = shared.nameA;
 if (shared.nameB) state.nameB = shared.nameB;
 if (shared.bias != null) state.bias = shared.bias;
+if (shared.lambda != null) state.lambda = shared.lambda;
+if (shared.extra?.length) {
+  for (const e of shared.extra.slice(0, 3)) {
+    state.people.push({ pt: e.pt, modes: new Set([e.mode]), name: e.name });
+  }
+}
 if (shared.daypart) state.daypart = shared.daypart;
 if (shared.favs?.length) seedFavs(state.A.pt, state.B.pt, shared.favs);
 
@@ -154,6 +160,8 @@ function syncUrl(): void {
     daypart: state.daypart,
     favs: [...loadFavs(state.A.pt, state.B.pt)],
     solo: state.solo || undefined,
+    extra: state.people.slice(2).map((p) => ({ pt: p.pt, mode: [...p.modes][0], name: p.name })),
+    lambda: state.lambda,
   });
   history.replaceState(null, '', hash);
 }
@@ -258,7 +266,7 @@ function makePersonMarker(seed: number): L.Marker {
   return marker;
 }
 
-const markers: L.Marker[] = [makePersonMarker(0), makePersonMarker(1)];
+const markers: L.Marker[] = state.people.map((_, i) => makePersonMarker(i)); // covers hydrated group plans
 
 // ── Swap A ↔ B ───────────────────────────────────────────────
 function swapPersons(): void {
@@ -862,7 +870,7 @@ function heatColor(t: number): string {
 // ── Exact street routing (OSRM) ──────────────────────────────
 // Model times paint the heatmap; the ranked list gets refined with real
 // street-network routing per venue. Cache: `${mode}:${venueId}` → minutes.
-const exactCache: Map<string, number | null>[] = [new Map(), new Map()];
+const exactCache: Map<string, number | null>[] = state.people.map(() => new Map());
 let refineToken = 0;
 
 function effectiveCombos(
@@ -1435,9 +1443,11 @@ function buildMobileLayout(): void {
     const va = (document.getElementById('addr-a') as HTMLInputElement).value.trim();
     const vb = (document.getElementById('addr-b') as HTMLInputElement).value.trim();
     const mode = MODE_LABEL[[...state.A.modes][0]].toLowerCase();
-    sum.textContent = state.solo
-      ? `${va || 'Set your location'} \u00b7 ${mode}`
-      : `${personLabel(0)}: ${va || 'set address'} \u2194 ${personLabel(1)}: ${vb || 'set address'}`;
+    sum.textContent = groupMode()
+      ? `${state.people.length} people \u00b7 fair zone`
+      : state.solo
+        ? `${va || 'Set your location'} \u00b7 ${mode}`
+        : `${personLabel(0)}: ${va || 'set address'} \u2194 ${personLabel(1)}: ${vb || 'set address'}`;
     bInvite.hidden = !state.solo;
   };
 
@@ -1782,6 +1792,7 @@ function removePerson(i: number): void {
 wirePersonName(0);
 wirePersonName(1);
 document.getElementById('add-person')!.onclick = addPerson;
+renderExtraPeople(); // rebuild rows for any people hydrated from a group share link
 syncModeUi();
 applyNames();
 
