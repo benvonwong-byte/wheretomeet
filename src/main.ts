@@ -68,11 +68,41 @@ const MODE_LABEL = Object.fromEntries(MODES.map((m) => [m.id, m.label])) as Reco
 interface Person {
   pt: Pt;
   modes: Set<Mode>;
+  name: string;
 }
 
+// people[] is the storage (index 0 = you); A/B/nameA/nameB are back-compat
+// views over people[0..1] so the existing 2-person call sites are untouched.
+// Phase 2 grows people[] to 5 and reads it directly.
 const state = {
-  A: { pt: { lat: 40.7143, lng: -73.9614 }, modes: new Set<Mode>(['transit']) } as Person,
-  B: { pt: { lat: 40.787, lng: -73.9754 }, modes: new Set<Mode>(['transit']) } as Person,
+  people: [
+    { pt: { lat: 40.7143, lng: -73.9614 }, modes: new Set<Mode>(['transit']), name: '' },
+    { pt: { lat: 40.787, lng: -73.9754 }, modes: new Set<Mode>(['transit']), name: '' },
+  ] as Person[],
+  get A(): Person {
+    return this.people[0];
+  },
+  set A(p: Person) {
+    this.people[0] = p;
+  },
+  get B(): Person {
+    return this.people[1];
+  },
+  set B(p: Person) {
+    this.people[1] = p;
+  },
+  get nameA(): string {
+    return this.people[0].name;
+  },
+  set nameA(v: string) {
+    this.people[0].name = v;
+  },
+  get nameB(): string {
+    return this.people[1].name;
+  },
+  set nameB(v: string) {
+    this.people[1].name = v;
+  },
   emojiFilter: new Set<string>(),
   cats: new Set<Venue['cat']>(['restaurant', 'cafe', 'activity']),
   veganOnly: true, // show fully-vegan AND vegan-friendly by default (the whole vegan universe)
@@ -81,8 +111,6 @@ const state = {
   bubbleTea: false,
   glutenFree: false,
   daypart: 'midday' as Daypart,
-  nameA: '',
-  nameB: '',
   bias: 0, // minutes: negative = A gets the advantage, positive = B does
   sortBy: 'best' as SortBy,
   solo: false, // near-me browsing: B mirrors A and stays hidden until set
