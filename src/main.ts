@@ -6,10 +6,10 @@ import subwayData from './data/subway.json';
 import { NYC_GRID, pointToCell } from './lib/geo';
 import { carDaypartMin } from './lib/modes';
 import { buildGraph, transitPath, type TransitGraph } from './lib/transit';
-import { timeField, comboLayer, minPersonField, scoreAtPoint, fairnessScore } from './lib/fairness';
+import { timeField, comboLayer, minPersonField, scoreAtPoint, fairnessScore, groupScore, groupLayer } from './lib/fairness';
 import { maskField } from './lib/contours';
 import landmaskData from './data/landmask.json';
-import { renderHeat } from './lib/heat';
+import { renderHeat, renderFairZone } from './lib/heat';
 import { filterVenues } from './lib/venues';
 import { geocode, makeSuggester, type GeoHit } from './lib/geocode';
 import { routedMinutes, routedField, routedGeometry } from './lib/osrm';
@@ -17,7 +17,7 @@ import { venueEmoji } from './lib/emoji';
 import { loadFavs, toggleFav, seedFavs } from './lib/favs';
 import { encodeShare, parseShare } from './lib/share';
 import { parseMapLink, validateSubmission } from './lib/submit';
-import type { Pt, Mode, Venue, ComboLayer, TimeField, SubwayData, Daypart } from './lib/types';
+import type { Pt, Mode, Venue, ComboLayer, GroupLayer, TimeField, SubwayData, Daypart } from './lib/types';
 
 // ── Static data ──────────────────────────────────────────────
 // venues.json = OSM-baked; supplement.json = hand-curated non-OSM spots;
@@ -117,9 +117,13 @@ const state = {
   glutenFree: false,
   daypart: 'midday' as Daypart,
   bias: 0, // minutes: negative = A gets the advantage, positive = B does
+  lambda: 0.35, // group mode: 0 = strict fairness (minimax), 1 = least total
   sortBy: 'best' as SortBy,
   solo: false, // near-me browsing: B mirrors A and stays hidden until set
 };
+
+// 1 person = near-me, 2 = duo (A/B, untouched), 3+ = group blend.
+const groupMode = (): boolean => state.people.length >= 3;
 
 // Hydrate from a shared link — the URL hash IS the plan.
 const shared = parseShare(location.hash);
@@ -233,9 +237,11 @@ function bulletIcon(i: number): L.DivIcon {
   });
 }
 
-function makePersonMarker(i: number): L.Marker {
-  const marker = L.marker(state.people[i].pt, { icon: bulletIcon(i), draggable: true }).addTo(map);
+function makePersonMarker(seed: number): L.Marker {
+  const marker = L.marker(state.people[seed].pt, { icon: bulletIcon(seed), draggable: true }).addTo(map);
   marker.on('dragend', () => {
+    const i = markers.indexOf(marker); // live index — survives add/remove splices
+    if (i < 0) return;
     const ll = marker.getLatLng();
     state.people[i].pt = { lat: ll.lat, lng: ll.lng };
     if (state.solo && i === 0) {
@@ -394,6 +400,12 @@ function renderDayparts(): void {
 
 function updateBiasLabel(): void {
   const val = document.getElementById('bias-val')!;
+  if (groupMode()) {
+    val.textContent = state.lambda <= 0.15 ? 'FAIR TO ALL' : state.lambda >= 0.85 ? 'LEAST TOTAL' : 'BALANCED';
+    document.getElementById('bias-left')!.textContent = '← fair to all';
+    document.getElementById('bias-right')!.textContent = 'least total →';
+    return;
+  }
   val.textContent =
     state.bias === 0
       ? 'FAIR'
@@ -404,12 +416,35 @@ function updateBiasLabel(): void {
   document.getElementById('bias-right')!.textContent = `${personLabel(1)} advantage →`;
 }
 
+// The one slider is the directional dial in duo, the Fairness↔Efficiency λ in group.
+function configureSlider(): void {
+  const slider = document.getElementById('bias') as HTMLInputElement;
+  if (groupMode()) {
+    slider.min = '0';
+    slider.max = '100';
+    slider.step = '5';
+    slider.value = String(Math.round(state.lambda * 100));
+  } else {
+    slider.min = '-20';
+    slider.max = '20';
+    slider.step = '5';
+    slider.value = String(state.bias);
+  }
+  updateBiasLabel();
+}
+
 function wireBias(): void {
   const slider = document.getElementById('bias') as HTMLInputElement;
   slider.addEventListener('input', () => {
-    state.bias = +slider.value;
-    updateBiasLabel();
-    scheduleRecompute();
+    if (groupMode()) {
+      state.lambda = +slider.value / 100;
+      updateBiasLabel();
+      scheduleRecompute(true);
+    } else {
+      state.bias = +slider.value;
+      updateBiasLabel();
+      scheduleRecompute();
+    }
   });
 }
 
@@ -599,9 +634,17 @@ function scheduleRecompute(venuesOnly = false): void {
 }
 
 let lastLayers: ComboLayer[] = [];
+let lastGroup: GroupLayer | null = null;
 
 function recompute(venuesOnly: boolean): void {
-  if (!venuesOnly || lastLayers.length === 0) {
+  if (groupMode()) {
+    if (!venuesOnly || !lastGroup) {
+      const fields = state.people.map((p, i) => getField(i, [...p.modes][0]));
+      lastGroup = groupLayer(fields, state.lambda);
+      lastLayers = [];
+    }
+  } else if (!venuesOnly || lastLayers.length === 0) {
+    lastGroup = null;
     const combos = activeCombos();
     lastLayers = combos.map((c) => {
       const fA = getField(0, c.a);
@@ -624,6 +667,19 @@ let heatOverlay: L.ImageOverlay | null = null;
 let shownVenueCells: number[] = []; // grid cells of the currently listed venues
 
 function drawContours(): void {
+  if (groupMode()) {
+    // Group: single warm-green "fair zone" glow, brightest where the blend wins.
+    if (!lastGroup) return;
+    const masked = maskField(lastGroup.scores.slice(), LANDMASK);
+    const url = renderFairZone(masked, shownVenueCells, GRID).toDataURL();
+    if (!heatOverlay) {
+      heatOverlay = L.imageOverlay(url, HEAT_BOUNDS, { opacity: 0.6, className: 'glow-img', interactive: false }).addTo(map);
+    } else {
+      heatOverlay.setUrl(url);
+    }
+    heatOverlay.setOpacity(0.62);
+    return;
+  }
   if (lastLayers.length === 0) return;
   const gap = new Float32Array(CELLS);
   const minA = maskField(minPersonField(lastLayers, 'A', CELLS), LANDMASK);
@@ -884,6 +940,11 @@ function renderVenues(): void {
       })
     : preEmoji;
 
+  if (groupMode()) {
+    renderGroupVenues(filtered);
+    return;
+  }
+
   // Shortlist by model score with margin, then rank by the SAME times the rows
   // display (street-routed where available) so rank and readout never disagree.
   const candidates = filtered
@@ -988,6 +1049,164 @@ function renderVenues(): void {
   syncUrl();
 }
 
+// ── Group mode (3+ people): blend ranking, N-person rows/detail ──
+function groupVenueTimes(v: Venue): number[] {
+  const cell = pointToCell(GRID, v);
+  return state.people.map((p, i) => {
+    const mode = [...p.modes][0];
+    const ex = exactCache[i].get(`${mode}:${v.id}`);
+    if (typeof ex === 'number') return ex;
+    const f = getField(i, mode);
+    return cell >= 0 ? f[cell] : Infinity;
+  });
+}
+
+function renderGroupVenues(filtered: Venue[]): void {
+  const listEl = document.getElementById('venues')!;
+  const headEl = document.getElementById('venues-head')!;
+
+  const enriched = filtered
+    .map((v) => {
+      const times = groupVenueTimes(v);
+      const worst = Math.max(...times);
+      const total = times.reduce((a, b) => a + b, 0);
+      const refined = state.people.some((p, i) => typeof exactCache[i].get(`${[...p.modes][0]}:${v.id}`) === 'number');
+      return { v, times, worst, total, refined, finalScore: groupScore(times, state.lambda) };
+    })
+    .filter((x) => isFinite(x.worst) && x.finalScore > 0.001);
+
+  const minWorst = enriched.reduce((m, x) => Math.min(m, x.worst), Infinity);
+  const scored = enriched
+    .filter((x) => x.worst <= minWorst + 12) // fair spots only: nobody stuck far
+    .sort((x, y) => y.finalScore - x.finalScore)
+    .slice(0, 40);
+
+  headEl.textContent = `Fair for all ${state.people.length} · ${scored.length}`;
+
+  if (!scored.length) {
+    listEl.innerHTML = `<li class="empty">No spot works for everyone yet — try walk/bike modes or move a pin.</li>`;
+    shownVenueCells = [];
+    drawContours();
+    renderShortlist(loadFavs(state.A.pt, state.B.pt));
+    syncUrl();
+    return;
+  }
+
+  const favs = loadFavs(state.A.pt, state.B.pt);
+  const ordered = [...scored.filter((x) => favs.has(x.v.id)), ...scored.filter((x) => !favs.has(x.v.id))];
+  const maxScore = Math.max(...scored.map((x) => x.finalScore)) || 1;
+
+  for (const { v, times, worst, total, refined, finalScore } of ordered) {
+    const isFav = favs.has(v.id);
+    const ring = isFav ? '#ff2d78' : v.vegan === 2 ? '#00e05c' : v.vegan === 1 ? '#7dedaa' : '#fff';
+    const pin = L.marker([v.lat, v.lng], {
+      icon: L.divIcon({
+        className: '',
+        html: `<div class="venue-pin${v.rating != null && v.rating >= 4.5 ? ' top-rated' : ''}" style="background:${heatColor(finalScore / maxScore)};border-color:${ring}">${venueEmoji(v)}${v.vegan === 2 ? '<span class="pin-leaf">🌱</span>' : ''}${isFav ? '<span class="pin-fav">♥</span>' : ''}</div>`,
+        iconSize: [26, 26],
+        iconAnchor: [13, 13],
+      }),
+    }).addTo(venueLayer);
+    pin.on('click', () => showGroupDetail(v, times));
+
+    const li = document.createElement('li');
+    if (isFav) li.className = 'faved';
+    const meta = metaLine(v);
+    li.innerHTML =
+      `<span class="v-name">${venueEmoji(v)} ${esc(v.name)}</span>` +
+      `<span class="v-side"><button class="fav-btn${isFav ? ' on' : ''}" title="favorite for this group">♥</button>` +
+      `<span class="v-times">${refined ? '<span class="routed">⚡</span>' : ''}<b class="ta">${Math.round(worst)}′</b><span class="v-total"> longest · ${Math.round(total)}′ total</span></span></span>` +
+      (meta ? `<span class="v-meta">${meta}</span>` : '') +
+      `<span class="v-tags">${venueTags(v)}</span>`;
+    li.querySelector<HTMLButtonElement>('.fav-btn')!.onclick = (e) => {
+      e.stopPropagation();
+      toggleFav(state.A.pt, state.B.pt, v.id);
+      renderVenues();
+    };
+    li.onclick = () => {
+      map.setView([v.lat, v.lng], Math.max(map.getZoom(), 14));
+      showGroupDetail(v, times);
+    };
+    listEl.appendChild(li);
+  }
+
+  void refineVenues(scored.map((x) => x.v));
+  shownVenueCells = scored.map((x) => pointToCell(GRID, x.v));
+  drawContours();
+  renderShortlist(favs);
+  syncUrl();
+}
+
+async function drawGroupRoutes(v: Venue): Promise<void> {
+  const token = ++routeToken;
+  const legs = await Promise.all(state.people.map((p, i) => personRoute(i, [...p.modes][0], v)));
+  if (token !== routeToken) return;
+  routeLayer.clearLayers();
+  legs.forEach((leg, i) => {
+    const mode = [...state.people[i].modes][0];
+    L.polyline(leg.path, {
+      color: PERSON_COLORS[i],
+      weight: leg.routed ? 4 : 3,
+      opacity: leg.routed ? 0.85 : 0.45,
+      dashArray: mode === 'transit' ? '2 8' : leg.routed ? undefined : '10 10',
+      lineCap: 'round' as const,
+    }).addTo(routeLayer);
+  });
+}
+
+function showGroupDetail(v: Venue, times: number[]): void {
+  const worst = Math.max(...times);
+  const total = times.reduce((a, b) => a + b, 0);
+  const rows = state.people
+    .map((p, i) => {
+      const t = times[i];
+      const far = isFinite(t) && t === worst && state.people.length > 1;
+      return `<tr${far ? ' class="far"' : ''}><td><span class="cg" style="color:${PERSON_COLORS[i]}">${esc(personLabel(i))} · ${MODE_LABEL[[...p.modes][0]]}</span></td><td>${isFinite(t) ? Math.round(t) + '′' : '—'}</td></tr>`;
+    })
+    .join('');
+  const summary = `<tr class="g-sum"><td>Longest ${Math.round(worst)}′</td><td>${Math.round(total)}′ total</td></tr>`;
+  const metaBits: string[] = [];
+  if (v.price) metaBits.push(`<span class="price">${'$'.repeat(v.price)}</span>`);
+  if (v.cuisine) metaBits.push(esc(v.cuisine.split(';')[0].replace(/_/g, ' ')));
+  const meta = metaBits.join(' · ');
+  const ratingRow =
+    v.rating != null
+      ? `<div class="detail-rating"><span class="stars">${'★'.repeat(Math.round(v.rating))}${'☆'.repeat(5 - Math.round(v.rating))}</span> <b>${v.rating.toFixed(1)}</b>${v.ratings ? ` · ${v.ratings.toLocaleString()} reviews` : ''}</div>`
+      : `<div class="detail-rating none"><span class="stars">☆☆☆☆☆</span> not yet rated</div>`;
+  const isFav = loadFavs(state.A.pt, state.B.pt).has(v.id);
+  detailEl.innerHTML =
+    `<button class="detail-close" aria-label="Close">✕</button>` +
+    `<button class="fav-btn detail-fav${isFav ? ' on' : ''}" title="favorite for this group">♥</button>` +
+    (v.img ? `<img class="detail-img" src="${esc(v.img)}" alt="" onerror="this.remove()" />` : '') +
+    `<div class="detail-body">` +
+    `<h3>${venueEmoji(v)} ${esc(v.name)}</h3>` +
+    ratingRow +
+    (meta ? `<div class="detail-meta">${meta}</div>` : '') +
+    `<div class="detail-tags">${venueTags(v)}</div>` +
+    (v.desc ? `<p class="detail-desc">${esc(v.desc)}</p>` : '') +
+    `<div class="detail-facts">` +
+    (v.addr ? `<div>📍 ${esc(v.addr)}</div>` : '') +
+    (v.tel ? `<div>📞 ${esc(v.tel)}</div>` : '') +
+    `</div>` +
+    `<table class="detail-times group">${rows}${summary}</table>` +
+    `<div class="detail-links">` +
+    (v.web ? `<a href="${esc(v.web)}" target="_blank" rel="noopener">Website ↗</a>` : '') +
+    `<a href="${gmaps(v)}" target="_blank" rel="noopener">Google Maps ↗</a>` +
+    `</div></div>`;
+  detailEl.hidden = false;
+  void drawGroupRoutes(v);
+  if (IS_MOBILE) {
+    sheetTo('half');
+    map.panInside([v.lat, v.lng], { paddingTopLeft: [24, 130], paddingBottomRight: [24, Math.round(window.innerHeight * 0.55)] });
+  }
+  detailEl.querySelector<HTMLButtonElement>('.detail-close')!.onclick = closeDetail;
+  detailEl.querySelector<HTMLButtonElement>('.detail-fav')!.onclick = () => {
+    toggleFav(state.A.pt, state.B.pt, v.id);
+    renderVenues();
+    showGroupDetail(v, times);
+  };
+}
+
 
 // ── Emoji legend (map side) — tap to filter by venue type ────
 function renderEmojiLegend(counts: Map<string, number>): void {
@@ -1022,16 +1241,18 @@ function renderShortlist(favs: Set<string>): void {
   panel.querySelector('h3')!.innerHTML = `♥ Your shortlist (${items.length}) <span class="sl-caret">▾</span>`;
   list.innerHTML = '';
   for (const v of items) {
-    const s = scoreAtPoint(GRID, lastLayers, v);
+    const group = groupMode();
+    const s = group ? null : scoreAtPoint(GRID, lastLayers, v);
     const combos = s ? effectiveCombos(v, s.combos).combos : [];
     const best = combos.length ? pickCombo(combos, state.sortBy) : null;
+    const gtimes = group ? groupVenueTimes(v) : null;
     const li = document.createElement('li');
-    li.innerHTML =
-      `<span class="sl-name">${venueEmoji(v)} ${esc(v.name)}</span>` +
-      (best
+    const times = group
+      ? `<span class="sl-times"><b class="ta">${Math.round(Math.max(...gtimes!))}′</b></span>`
+      : best
         ? `<span class="sl-times">${state.solo ? `<b class="ta">${Math.round(best.tA)}′</b>` : `<b class="ta">${Math.round(best.tA)}′</b>/<b class="tb">${Math.round(best.tB)}′</b>`}</span>`
-        : '') +
-      `<button class="sl-remove" title="remove">✕</button>`;
+        : '';
+    li.innerHTML = `<span class="sl-name">${venueEmoji(v)} ${esc(v.name)}</span>` + times + `<button class="sl-remove" title="remove">✕</button>`;
     li.querySelector<HTMLButtonElement>('.sl-remove')!.onclick = (e) => {
       e.stopPropagation();
       toggleFav(state.A.pt, state.B.pt, v.id);
@@ -1039,7 +1260,8 @@ function renderShortlist(favs: Set<string>): void {
     };
     li.onclick = () => {
       map.setView([v.lat, v.lng], Math.max(map.getZoom(), 14));
-      if (s) showDetail(v, effectiveCombos(v, s.combos).combos);
+      if (group) showGroupDetail(v, gtimes!);
+      else if (s) showDetail(v, effectiveCombos(v, s.combos).combos);
     };
     list.appendChild(li);
   }
@@ -1080,6 +1302,8 @@ function buildMobileLayout(): void {
   editor.hidden = true;
   editor.appendChild(document.querySelector('.person[data-person="A"]')!);
   editor.appendChild(document.querySelector('.person[data-person="B"]')!);
+  editor.appendChild(document.getElementById('extra-people')!);
+  editor.appendChild(document.getElementById('add-person')!);
   editor.appendChild(document.getElementById('tuning-panel')!);
   const done = document.createElement('button');
   done.id = 'plan-done';
@@ -1223,19 +1447,28 @@ function buildMobileLayout(): void {
 }
 
 // ── Solo mode: "what's vegan near me" — A only, B joins later ─
-function soloUi(on: boolean): void {
-  (document.querySelector('#tuning-panel .bias') as HTMLElement).hidden = on;
-  (document.getElementById('layers-panel') as HTMLElement).hidden = on;
-  (document.getElementById('swap-ab') as HTMLElement).hidden = on;
-  (document.getElementById('modes-b') as HTMLElement).hidden = on;
-  (document.getElementById('sort-chips') as HTMLElement).hidden = on;
-  (document.getElementById('addr-b') as HTMLInputElement).placeholder = on
+// One authority for mode-dependent chrome. solo (1) / duo (2) / group (3+).
+function syncModeUi(): void {
+  const g = groupMode();
+  const solo = state.solo && !g;
+  (document.querySelector('#tuning-panel .bias') as HTMLElement).hidden = solo; // dial(duo) or λ(group); hidden solo
+  (document.getElementById('layers-panel') as HTMLElement).hidden = solo || g; // advantage key: duo only
+  (document.getElementById('swap-ab') as HTMLElement).hidden = solo || g; // swap: duo only
+  (document.getElementById('modes-b') as HTMLElement).hidden = solo;
+  (document.getElementById('sort-chips') as HTMLElement).hidden = solo || g; // A/B sorts: duo only
+  const addP = document.getElementById('add-person') as HTMLElement | null;
+  if (addP) addP.hidden = solo || state.people.length >= 5;
+  const extra = document.getElementById('extra-people') as HTMLElement | null;
+  if (extra) extra.hidden = solo;
+  (document.getElementById('addr-b') as HTMLInputElement).placeholder = solo
     ? 'Add a friend to meet in the middle…'
     : 'Person B address…';
-  (document.getElementById('addr-a') as HTMLInputElement).placeholder = on
+  (document.getElementById('addr-a') as HTMLInputElement).placeholder = solo
     ? '📍 Your location or an address…'
     : 'Person A address…';
+  configureSlider();
 }
+const soloUi = (_on: boolean): void => syncModeUi();
 
 function enterSolo(pt: Pt, label: string, forceWalk: boolean): void {
   state.people.length = 2; // collapse any group back to A/B before going near-me
@@ -1460,25 +1693,25 @@ if (shared.solo && shared.a) {
 }
 
 function applyNames(): void {
-  const ba = document.getElementById('bullet-a')!;
-  const bb = document.getElementById('bullet-b')!;
-  ba.textContent = personInitial(0);
-  bb.textContent = personInitial(1);
-  ba.title = state.nameA ? `${state.nameA} — click to rename` : 'Click to add a name';
-  bb.title = state.nameB ? `${state.nameB} — click to rename` : 'Click to add a name';
-  markers[0].setIcon(bulletIcon(0));
-  markers[1].setIcon(bulletIcon(1));
+  for (let i = 0; i < state.people.length; i++) {
+    const b = document.getElementById(`bullet-${slot(i)}`);
+    if (b) {
+      b.textContent = personInitial(i);
+      b.title = state.people[i].name ? `${state.people[i].name} — click to rename` : 'Click to add a name';
+    }
+    if (markers[i]) markers[i].setIcon(bulletIcon(i));
+  }
   document.querySelector('.adv-labels .adv-a')!.textContent = `${personLabel(0)} sooner`;
   document.querySelector('.adv-labels .adv-b')!.textContent = `${personLabel(1)} sooner`;
   updateBiasLabel();
   renderSortChips();
 }
 
-for (let i = 0; i < 2; i++) {
+// Name editing for one person row (bullet click → inline input).
+function wirePersonName(i: number): void {
   const input = document.getElementById(`name-${slot(i)}`) as HTMLInputElement;
   const bullet = document.getElementById(`bullet-${slot(i)}`)!;
   input.value = state.people[i].name;
-  // Click the bullet to name the person; Enter/blur commits and restores it.
   bullet.addEventListener('click', () => {
     input.classList.add('editing');
     input.focus();
@@ -1494,6 +1727,62 @@ for (let i = 0; i < 2; i++) {
     syncUrl();
   });
 }
+
+// ── Group members: dynamic person rows for people[2..] ───────
+function renderExtraPeople(): void {
+  const box = document.getElementById('extra-people');
+  if (!box) return;
+  box.innerHTML = '';
+  for (let i = 2; i < state.people.length; i++) {
+    const sec = document.createElement('section');
+    sec.className = 'person extra';
+    sec.dataset.person = slot(i);
+    sec.innerHTML =
+      `<div class="person-head">` +
+      `<span class="bullet" id="bullet-${slot(i)}" style="background:${PERSON_COLORS[i]}">${personInitial(i)}</span>` +
+      `<input id="name-${slot(i)}" class="pname" type="text" maxlength="14" placeholder="Name" autocomplete="off" />` +
+      `<input id="addr-${slot(i)}" type="text" placeholder="Person ${personInitial(i)} address…" autocomplete="off" />` +
+      `<button class="person-remove" title="remove this person">✕</button>` +
+      `</div><div class="modes" id="modes-${slot(i)}"></div>`;
+    box.appendChild(sec);
+    renderModes(i);
+    wireInput(i);
+    wirePersonName(i);
+    sec.querySelector<HTMLButtonElement>('.person-remove')!.onclick = () => removePerson(i);
+  }
+}
+
+function addPerson(): void {
+  if (state.people.length >= 5 || state.solo) return;
+  const c = map.getCenter();
+  state.people.push({ pt: { lat: c.lat, lng: c.lng }, modes: new Set<Mode>(['transit']), name: '' });
+  exactCache.push(new Map());
+  markers.push(makePersonMarker(state.people.length - 1)); // push doesn't shift existing indices
+  renderExtraPeople();
+  applyNames();
+  syncModeUi();
+  scheduleRecompute();
+}
+
+function removePerson(i: number): void {
+  if (i < 2 || state.people.length <= 2) return; // A/B are permanent; floor is duo
+  state.people.splice(i, 1);
+  const [m] = markers.splice(i, 1);
+  map.removeLayer(m);
+  exactCache.splice(i, 1);
+  fieldCache.clear(); // index-keyed keys are now stale (indices shifted down)
+  fieldUpgrades.clear();
+  lastGroup = null;
+  renderExtraPeople();
+  applyNames();
+  syncModeUi();
+  scheduleRecompute();
+}
+
+wirePersonName(0);
+wirePersonName(1);
+document.getElementById('add-person')!.onclick = addPerson;
+syncModeUi();
 applyNames();
 
 document.getElementById('swap-ab')!.onclick = swapPersons;
