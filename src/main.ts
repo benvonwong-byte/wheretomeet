@@ -64,6 +64,11 @@ const MODES: { id: Mode; label: string }[] = [
 ];
 const MODE_LABEL = Object.fromEntries(MODES.map((m) => [m.id, m.label])) as Record<Mode, string>;
 
+// Per-person identity, indexed. 0=you. Colors are distinct + map-legible.
+const SLOT = ['a', 'b', 'c', 'd', 'e'] as const;
+const slot = (i: number): string => SLOT[i] ?? String(i);
+const PERSON_COLORS = ['#4f8f00', '#7b2cbf', '#009e8f', '#e0662a', '#2f6fd0'];
+
 // ── State ────────────────────────────────────────────────────
 interface Person {
   pt: Pt;
@@ -153,25 +158,25 @@ const fieldCache = new Map<string, TimeField>();
 // Street modes upgrade from model estimates to real OSRM-routed fields, async.
 const fieldUpgrades = new Map<string, 'pending' | 'done'>();
 
-function getField(who: 'A' | 'B', mode: Mode): TimeField {
+function getField(i: number, mode: Mode): TimeField {
   // Transit (headway waits) and car (traffic) depend on the daypart.
-  const key = mode === 'transit' || mode === 'car' ? `${who}:${mode}:${state.daypart}` : `${who}:${mode}`;
+  const key = mode === 'transit' || mode === 'car' ? `${i}:${mode}:${state.daypart}` : `${i}:${mode}`;
   let f = fieldCache.get(key);
   if (!f) {
-    f = timeField(getGraph(state.daypart), state[who].pt, mode, GRID);
-    if (mode === 'car') for (let i = 0; i < f.length; i++) f[i] = carDaypartMin(f[i], state.daypart);
+    f = timeField(getGraph(state.daypart), state.people[i].pt, mode, GRID);
+    if (mode === 'car') for (let j = 0; j < f.length; j++) f[j] = carDaypartMin(f[j], state.daypart);
     fieldCache.set(key, f);
   }
-  if (mode !== 'transit' && !fieldUpgrades.has(key)) upgradeField(who, mode, key);
+  if (mode !== 'transit' && !fieldUpgrades.has(key)) upgradeField(i, mode, key);
   return f;
 }
 
-function upgradeField(who: 'A' | 'B', mode: Mode, key: string): void {
+function upgradeField(i: number, mode: Mode, key: string): void {
   fieldUpgrades.set(key, 'pending');
-  const pt = state[who].pt;
+  const pt = state.people[i].pt;
   const daypart = state.daypart;
   void routedField(pt, mode, GRID).then((f) => {
-    if (state[who].pt !== pt) return; // pin moved while routing — stale
+    if (state.people[i].pt !== pt) return; // pin moved while routing — stale
     if (!f) {
       fieldUpgrades.delete(key); // local server unreachable; retry on next recompute
       return;
@@ -183,9 +188,9 @@ function upgradeField(who: 'A' | 'B', mode: Mode, key: string): void {
   });
 }
 
-function clearPersonFields(who: 'A' | 'B'): void {
-  for (const key of [...fieldCache.keys()]) if (key.startsWith(`${who}:`)) fieldCache.delete(key);
-  for (const key of [...fieldUpgrades.keys()]) if (key.startsWith(`${who}:`)) fieldUpgrades.delete(key);
+function clearPersonFields(i: number): void {
+  for (const key of [...fieldCache.keys()]) if (key.startsWith(`${i}:`)) fieldCache.delete(key);
+  for (const key of [...fieldUpgrades.keys()]) if (key.startsWith(`${i}:`)) fieldUpgrades.delete(key);
 }
 
 function activeCombos(): { a: Mode; b: Mode }[] {
@@ -216,58 +221,55 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
 
 const venueLayer = L.layerGroup().addTo(map);
 
-const personLabel = (who: 'A' | 'B'): string => (who === 'A' ? state.nameA : state.nameB) || who;
-const personInitial = (who: 'A' | 'B'): string => personLabel(who).charAt(0).toUpperCase();
+const personLabel = (i: number): string => state.people[i].name || String.fromCharCode(65 + i);
+const personInitial = (i: number): string => personLabel(i).charAt(0).toUpperCase();
 
-function bulletIcon(who: 'A' | 'B'): L.DivIcon {
+function bulletIcon(i: number): L.DivIcon {
   return L.divIcon({
     className: '',
-    html: `<div class="marker-bullet ${who.toLowerCase()}">${personInitial(who)}</div>`,
+    html: `<div class="marker-bullet ${slot(i)}" style="background:${PERSON_COLORS[i]}">${personInitial(i)}</div>`,
     iconSize: [30, 30],
     iconAnchor: [15, 15],
   });
 }
 
-function makePersonMarker(who: 'A' | 'B'): L.Marker {
-  const marker = L.marker(state[who].pt, { icon: bulletIcon(who), draggable: true }).addTo(map);
+function makePersonMarker(i: number): L.Marker {
+  const marker = L.marker(state.people[i].pt, { icon: bulletIcon(i), draggable: true }).addTo(map);
   marker.on('dragend', () => {
     const ll = marker.getLatLng();
-    state[who].pt = { lat: ll.lat, lng: ll.lng };
-    if (state.solo && who === 'A') {
-      state.B.pt = state.A.pt;
-      exactCache.B.clear();
+    state.people[i].pt = { lat: ll.lat, lng: ll.lng };
+    if (state.solo && i === 0) {
+      state.people[1].pt = state.people[0].pt;
+      exactCache[1].clear();
     }
-    clearPersonFields(who);
-    exactCache[who].clear();
-    (document.getElementById(`addr-${who.toLowerCase()}`) as HTMLInputElement).value = '';
-    coverageWarning(who);
+    clearPersonFields(i);
+    exactCache[i].clear();
+    const inp = document.getElementById(`addr-${slot(i)}`) as HTMLInputElement | null;
+    if (inp) inp.value = '';
+    coverageWarning(i);
     scheduleRecompute();
   });
   return marker;
 }
 
-const markers = { A: makePersonMarker('A'), B: makePersonMarker('B') };
+const markers: L.Marker[] = [makePersonMarker(0), makePersonMarker(1)];
 
 // ── Swap A ↔ B ───────────────────────────────────────────────
 function swapPersons(): void {
-  const tmp = state.A;
-  state.A = state.B;
-  state.B = tmp;
+  [state.people[0], state.people[1]] = [state.people[1], state.people[0]];
 
   // Rename cached fields instead of recomputing them.
-  const rename = (k: string) => (k.startsWith('A:') ? 'B' + k.slice(1) : k.startsWith('B:') ? 'A' + k.slice(1) : k);
+  const rename = (k: string) => (k.startsWith('0:') ? '1' + k.slice(1) : k.startsWith('1:') ? '0' + k.slice(1) : k);
   const fields = [...fieldCache].map(([k, v]) => [rename(k), v] as const);
   fieldCache.clear();
   for (const [k, v] of fields) fieldCache.set(k, v);
   const upgrades = [...fieldUpgrades].map(([k, v]) => [rename(k), v] as const);
   fieldUpgrades.clear();
   for (const [k, v] of upgrades) fieldUpgrades.set(k, v);
-  const tmpExact = exactCache.A;
-  exactCache.A = exactCache.B;
-  exactCache.B = tmpExact;
+  [exactCache[0], exactCache[1]] = [exactCache[1], exactCache[0]];
 
-  markers.A.setLatLng(state.A.pt);
-  markers.B.setLatLng(state.B.pt);
+  markers[0].setLatLng(state.people[0].pt);
+  markers[1].setLatLng(state.people[1].pt);
   const inA = document.getElementById('addr-a') as HTMLInputElement;
   const inB = document.getElementById('addr-b') as HTMLInputElement;
   [inA.value, inB.value] = [inB.value, inA.value];
@@ -278,25 +280,26 @@ function swapPersons(): void {
   const nB = document.getElementById('name-b') as HTMLInputElement;
   [nA.value, nB.value] = [nB.value, nA.value];
   applyNames();
-  renderModes('A');
-  renderModes('B');
+  renderModes(0);
+  renderModes(1);
   closeDetail();
   scheduleRecompute();
 }
 
 // ── UI: mode pills ───────────────────────────────────────────
-function renderModes(who: 'A' | 'B'): void {
-  const el = document.getElementById(`modes-${who.toLowerCase()}`)!;
+function renderModes(i: number): void {
+  const el = document.getElementById(`modes-${slot(i)}`);
+  if (!el) return; // person row not in the DOM (e.g. a removed group member)
   el.innerHTML = '';
   for (const m of MODES) {
     const btn = document.createElement('button');
-    btn.className = 'mode-pill' + (state[who].modes.has(m.id) ? ' on' : '');
+    btn.className = 'mode-pill' + (state.people[i].modes.has(m.id) ? ' on' : '');
     btn.textContent = m.label;
     btn.onclick = () => {
-      if (state[who].modes.has(m.id)) return;
-      state[who].modes = new Set([m.id]);
-      if (state.solo && who === 'A') state.B.modes = new Set([m.id]);
-      renderModes(who);
+      if (state.people[i].modes.has(m.id)) return;
+      state.people[i].modes = new Set([m.id]);
+      if (state.solo && i === 0) state.people[1].modes = new Set([m.id]);
+      renderModes(i);
       closeDetail(); // an open card would show combos for the OLD mode
       scheduleRecompute();
     };
@@ -316,8 +319,8 @@ const SORTS: { id: SortBy; label: string }[] = [
 ];
 
 function sortLabel(s: { id: SortBy; label: string }): string {
-  if (s.id === 'a') return `BEST FOR ${personLabel('A').toUpperCase()}`;
-  if (s.id === 'b') return `BEST FOR ${personLabel('B').toUpperCase()}`;
+  if (s.id === 'a') return `BEST FOR ${personLabel(0).toUpperCase()}`;
+  if (s.id === 'b') return `BEST FOR ${personLabel(1).toUpperCase()}`;
   return s.label;
 }
 
@@ -378,8 +381,8 @@ function renderDayparts(): void {
       if (state.daypart === d.id) return;
       state.daypart = d.id;
       // Refined car times are daypart-scaled — force a re-fetch at the new hour.
-      for (const who of ['A', 'B'] as const) {
-        for (const k of [...exactCache[who].keys()]) if (k.startsWith('car:')) exactCache[who].delete(k);
+      for (let i = 0; i < exactCache.length; i++) {
+        for (const k of [...exactCache[i].keys()]) if (k.startsWith('car:')) exactCache[i].delete(k);
       }
       renderDayparts();
       closeDetail();
@@ -395,10 +398,10 @@ function updateBiasLabel(): void {
     state.bias === 0
       ? 'FAIR'
       : state.bias < 0
-        ? `${personLabel('A')} saves ${-state.bias}′`
-        : `${personLabel('B')} saves ${state.bias}′`;
-  document.getElementById('bias-left')!.textContent = `← ${personLabel('A')} advantage`;
-  document.getElementById('bias-right')!.textContent = `${personLabel('B')} advantage →`;
+        ? `${personLabel(0)} saves ${-state.bias}′`
+        : `${personLabel(1)} saves ${state.bias}′`;
+  document.getElementById('bias-left')!.textContent = `← ${personLabel(0)} advantage`;
+  document.getElementById('bias-right')!.textContent = `${personLabel(1)} advantage →`;
 }
 
 function wireBias(): void {
@@ -458,42 +461,42 @@ function renderDietFilters(): void {
 }
 
 // ── UI: geocode inputs with autocomplete ─────────────────────
-function coverageWarning(who: 'A' | 'B'): void {
-  const p = state[who].pt;
+function coverageWarning(i: number): void {
+  const p = state.people[i].pt;
   const outside = p.lat < GRID.latMin || p.lat > GRID.latMax || p.lng < GRID.lngMin || p.lng > GRID.lngMax;
   if (outside) {
-    setStatus(`Heads up: ${who} is outside NYC coverage — no subway data there, times are rough estimates`, 5000);
+    setStatus(`Heads up: ${personLabel(i)} is outside NYC coverage — no subway data there, times are rough estimates`, 5000);
   }
 }
 
-function warnIfOutsideCoverage(who: 'A' | 'B', pt: Pt): void {
+function warnIfOutsideCoverage(i: number, pt: Pt): void {
   const inside =
     pt.lat >= GRID.latMin && pt.lat <= GRID.latMax && pt.lng >= GRID.lngMin && pt.lng <= GRID.lngMax;
   if (!inside) {
-    setStatus(`Heads up: ${who} is outside NYC coverage — subway can't reach there, times are rough estimates`, 5000);
+    setStatus(`Heads up: ${personLabel(i)} is outside NYC coverage — subway can't reach there, times are rough estimates`, 5000);
   }
 }
 
-function applyLocation(who: 'A' | 'B', hit: GeoHit, input: HTMLInputElement): void {
+function applyLocation(i: number, hit: GeoHit, input: HTMLInputElement): void {
   input.value = hit.label;
   input.classList.remove('bad');
-  if (state.solo && who === 'B') exitSolo();
-  state[who].pt = hit.pt;
-  if (state.solo && who === 'A') {
-    state.B.pt = hit.pt;
-    exactCache.B.clear();
+  if (state.solo && i === 1) exitSolo();
+  state.people[i].pt = hit.pt;
+  if (state.solo && i === 0) {
+    state.people[1].pt = hit.pt;
+    exactCache[1].clear();
   }
-  warnIfOutsideCoverage(who, hit.pt);
-  clearPersonFields(who);
-  exactCache[who].clear();
-  markers[who].setLatLng(hit.pt);
+  warnIfOutsideCoverage(i, hit.pt);
+  clearPersonFields(i);
+  exactCache[i].clear();
+  markers[i].setLatLng(hit.pt);
   map.panTo(hit.pt);
-  coverageWarning(who);
+  coverageWarning(i);
   scheduleRecompute();
 }
 
-function wireInput(who: 'A' | 'B'): void {
-  const input = document.getElementById(`addr-${who.toLowerCase()}`) as HTMLInputElement;
+function wireInput(i: number): void {
+  const input = document.getElementById(`addr-${slot(i)}`) as HTMLInputElement;
   const drop = document.createElement('div');
   drop.className = 'suggest';
   drop.hidden = true;
@@ -517,7 +520,7 @@ function wireInput(who: 'A' | 'B'): void {
       row.onmousedown = (e) => {
         e.preventDefault(); // beat the blur
         close();
-        applyLocation(who, h, input);
+        applyLocation(i, h, input);
       };
       drop.appendChild(row);
     });
@@ -552,7 +555,7 @@ function wireInput(who: 'A' | 'B'): void {
       const picked = sel >= 0 ? hits[sel] : hits[0];
       close();
       if (picked) {
-        applyLocation(who, picked, input);
+        applyLocation(i, picked, input);
         return;
       }
       // No suggestions — precise Nominatim fallback.
@@ -563,7 +566,7 @@ function wireInput(who: 'A' | 'B'): void {
         input.classList.add('bad');
         return;
       }
-      applyLocation(who, hit, input);
+      applyLocation(i, hit, input);
     }
   });
 }
@@ -601,8 +604,8 @@ function recompute(venuesOnly: boolean): void {
   if (!venuesOnly || lastLayers.length === 0) {
     const combos = activeCombos();
     lastLayers = combos.map((c) => {
-      const fA = getField('A', c.a);
-      const fB = state.solo ? fA : getField('B', c.b);
+      const fA = getField(0, c.a);
+      const fB = state.solo ? fA : getField(1, c.b);
       return comboLayer(c.a, c.b, fA, fB, state.bias);
     });
   }
@@ -698,8 +701,8 @@ function metaLine(v: Venue): string {
 const routeLayer = L.layerGroup().addTo(map);
 let routeToken = 0;
 
-async function personRoute(who: 'A' | 'B', mode: Mode, v: Venue): Promise<{ path: Pt[]; routed: boolean }> {
-  const origin = state[who].pt;
+async function personRoute(i: number, mode: Mode, v: Venue): Promise<{ path: Pt[]; routed: boolean }> {
+  const origin = state.people[i].pt;
   const dest = { lat: v.lat, lng: v.lng };
   if (mode === 'transit') return { path: transitPath(getGraph(state.daypart), origin, dest), routed: true };
   const geo = await routedGeometry(origin, dest, mode);
@@ -709,7 +712,7 @@ async function personRoute(who: 'A' | 'B', mode: Mode, v: Venue): Promise<{ path
 
 async function drawRoutes(v: Venue, modeA: Mode, modeB: Mode): Promise<void> {
   const token = ++routeToken;
-  const [ra, rb] = await Promise.all([personRoute('A', modeA, v), state.solo ? null : personRoute('B', modeB, v)]);
+  const [ra, rb] = await Promise.all([personRoute(0, modeA, v), state.solo ? null : personRoute(1, modeB, v)]);
   if (token !== routeToken) return; // another venue selected meanwhile
   routeLayer.clearLayers();
   const style = (color: string, mode: Mode, routed: boolean) => ({
@@ -738,9 +741,9 @@ function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB
   const rows = combos
     .map((c) =>
       state.solo
-        ? `<tr><td><span class="ca">${esc(personLabel('A'))} · ${MODE_LABEL[c.modeA]}</span></td><td>${Math.round(c.tA)}′</td></tr>`
-        : `<tr><td><span class="ca">${esc(personLabel('A'))} · ${MODE_LABEL[c.modeA]}</span></td><td>${Math.round(c.tA)}′</td>` +
-          `<td><span class="cb">${esc(personLabel('B'))} · ${MODE_LABEL[c.modeB]}</span></td><td>${Math.round(c.tB)}′</td>` +
+        ? `<tr><td><span class="ca">${esc(personLabel(0))} · ${MODE_LABEL[c.modeA]}</span></td><td>${Math.round(c.tA)}′</td></tr>`
+        : `<tr><td><span class="ca">${esc(personLabel(0))} · ${MODE_LABEL[c.modeA]}</span></td><td>${Math.round(c.tA)}′</td>` +
+          `<td><span class="cb">${esc(personLabel(1))} · ${MODE_LABEL[c.modeB]}</span></td><td>${Math.round(c.tB)}′</td>` +
           `<td class="gap">Δ${Math.round(Math.abs(c.tA - c.tB))}′</td></tr>`,
     )
     .join('');
@@ -803,7 +806,7 @@ function heatColor(t: number): string {
 // ── Exact street routing (OSRM) ──────────────────────────────
 // Model times paint the heatmap; the ranked list gets refined with real
 // street-network routing per venue. Cache: `${mode}:${venueId}` → minutes.
-const exactCache = { A: new Map<string, number | null>(), B: new Map<string, number | null>() };
+const exactCache: Map<string, number | null>[] = [new Map(), new Map()];
 let refineToken = 0;
 
 function effectiveCombos(
@@ -812,8 +815,8 @@ function effectiveCombos(
 ): { combos: { modeA: Mode; modeB: Mode; tA: number; tB: number }[]; refined: boolean } {
   let refined = false;
   const out = combos.map((c) => {
-    const eA = exactCache.A.get(`${c.modeA}:${v.id}`);
-    const eB = exactCache.B.get(`${c.modeB}:${v.id}`);
+    const eA = exactCache[0].get(`${c.modeA}:${v.id}`);
+    const eB = exactCache[1].get(`${c.modeB}:${v.id}`);
     if (typeof eA === 'number' || typeof eB === 'number') refined = true;
     return { ...c, tA: typeof eA === 'number' ? eA : c.tA, tB: typeof eB === 'number' ? eB : c.tB };
   });
@@ -823,21 +826,21 @@ function effectiveCombos(
 async function refineVenues(venues: Venue[]): Promise<void> {
   const token = ++refineToken;
   const jobs: Promise<void>[] = [];
-  const persons = state.solo ? (['A'] as const) : (['A', 'B'] as const);
-  for (const who of persons) {
-    for (const mode of state[who].modes) {
+  const persons = state.solo ? [0] : state.people.map((_, i) => i);
+  for (const idx of persons) {
+    for (const mode of state.people[idx].modes) {
       if (mode === 'transit') continue; // GTFS engine is the authority there
-      const missing = venues.filter((v) => !exactCache[who].has(`${mode}:${v.id}`));
+      const missing = venues.filter((v) => !exactCache[idx].has(`${mode}:${v.id}`));
       if (!missing.length) continue;
       const daypart = state.daypart;
       jobs.push(
-        routedMinutes(state[who].pt, missing, mode).then((mins) => {
+        routedMinutes(state.people[idx].pt, missing, mode).then((mins) => {
           if (!mins) return;
-          missing.forEach((v, i) => {
-            const t = mins[i];
+          missing.forEach((v, k) => {
+            const t = mins[k];
             const val = mode === 'car' && t != null ? carDaypartMin(t, daypart) : t;
-            exactCache[who].set(`${mode}:${v.id}`, val);
-            if (state.solo) exactCache.B.set(`${mode}:${v.id}`, val); // B mirrors A
+            exactCache[idx].set(`${mode}:${v.id}`, val);
+            if (state.solo) exactCache[1].set(`${mode}:${v.id}`, val); // B mirrors A
           });
         }),
       );
@@ -1210,7 +1213,7 @@ function buildMobileLayout(): void {
     const mode = MODE_LABEL[[...state.A.modes][0]].toLowerCase();
     sum.textContent = state.solo
       ? `${va || 'Set your location'} \u00b7 ${mode}`
-      : `${personLabel('A')}: ${va || 'set address'} \u2194 ${personLabel('B')}: ${vb || 'set address'}`;
+      : `${personLabel(0)}: ${va || 'set address'} \u2194 ${personLabel(1)}: ${vb || 'set address'}`;
     bInvite.hidden = !state.solo;
   };
 
@@ -1235,35 +1238,36 @@ function soloUi(on: boolean): void {
 }
 
 function enterSolo(pt: Pt, label: string, forceWalk: boolean): void {
+  state.people.length = 2; // collapse any group back to A/B before going near-me
   state.solo = true;
-  state.A.pt = pt;
-  state.B.pt = pt;
+  state.people[0].pt = pt;
+  state.people[1].pt = pt;
   if (forceWalk) {
-    state.A.modes = new Set(['walk']);
-    state.B.modes = new Set(['walk']);
+    state.people[0].modes = new Set(['walk']);
+    state.people[1].modes = new Set(['walk']);
   }
   (document.getElementById('addr-a') as HTMLInputElement).value = label;
   (document.getElementById('addr-b') as HTMLInputElement).value = '';
-  clearPersonFields('A');
-  clearPersonFields('B');
-  exactCache.A.clear();
-  exactCache.B.clear();
-  markers.A.setLatLng(pt);
-  map.removeLayer(markers.B);
+  clearPersonFields(0);
+  clearPersonFields(1);
+  exactCache[0].clear();
+  exactCache[1].clear();
+  markers[0].setLatLng(pt);
+  map.removeLayer(markers[1]);
   soloUi(true);
-  renderModes('A');
+  renderModes(0);
   closeDetail();
   map.setView(pt, 15);
   if (IS_MOBILE) sheetTo('peek'); // nearby-first: the map and its glow lead
-  coverageWarning('A');
+  coverageWarning(0);
   scheduleRecompute();
 }
 
 function exitSolo(): void {
   state.solo = false;
-  markers.B.addTo(map);
+  markers[1].addTo(map);
   soloUi(false);
-  renderModes('B');
+  renderModes(1);
 }
 
 function locateMe(): void {
@@ -1424,15 +1428,15 @@ function buildSubmitUi(): void {
 
 // ── Boot ─────────────────────────────────────────────────────
 buildSubmitUi();
-renderModes('A');
-renderModes('B');
+renderModes(0);
+renderModes(1);
 renderDayparts();
 wireBias();
 renderCatFilters();
 renderDietFilters();
 renderSortChips();
-wireInput('A');
-wireInput('B');
+wireInput(0);
+wireInput(1);
 
 // Restore shared-link UI state (labels, dial position).
 if (shared.labelA) (document.getElementById('addr-a') as HTMLInputElement).value = shared.labelA;
@@ -1458,22 +1462,22 @@ if (shared.solo && shared.a) {
 function applyNames(): void {
   const ba = document.getElementById('bullet-a')!;
   const bb = document.getElementById('bullet-b')!;
-  ba.textContent = personInitial('A');
-  bb.textContent = personInitial('B');
+  ba.textContent = personInitial(0);
+  bb.textContent = personInitial(1);
   ba.title = state.nameA ? `${state.nameA} — click to rename` : 'Click to add a name';
   bb.title = state.nameB ? `${state.nameB} — click to rename` : 'Click to add a name';
-  markers.A.setIcon(bulletIcon('A'));
-  markers.B.setIcon(bulletIcon('B'));
-  document.querySelector('.adv-labels .adv-a')!.textContent = `${personLabel('A')} sooner`;
-  document.querySelector('.adv-labels .adv-b')!.textContent = `${personLabel('B')} sooner`;
+  markers[0].setIcon(bulletIcon(0));
+  markers[1].setIcon(bulletIcon(1));
+  document.querySelector('.adv-labels .adv-a')!.textContent = `${personLabel(0)} sooner`;
+  document.querySelector('.adv-labels .adv-b')!.textContent = `${personLabel(1)} sooner`;
   updateBiasLabel();
   renderSortChips();
 }
 
-for (const who of ['A', 'B'] as const) {
-  const input = document.getElementById(`name-${who.toLowerCase()}`) as HTMLInputElement;
-  const bullet = document.getElementById(`bullet-${who.toLowerCase()}`)!;
-  input.value = who === 'A' ? state.nameA : state.nameB;
+for (let i = 0; i < 2; i++) {
+  const input = document.getElementById(`name-${slot(i)}`) as HTMLInputElement;
+  const bullet = document.getElementById(`bullet-${slot(i)}`)!;
+  input.value = state.people[i].name;
   // Click the bullet to name the person; Enter/blur commits and restores it.
   bullet.addEventListener('click', () => {
     input.classList.add('editing');
@@ -1485,8 +1489,7 @@ for (const who of ['A', 'B'] as const) {
     if (e.key === 'Enter' || e.key === 'Escape') input.blur();
   });
   input.addEventListener('input', () => {
-    if (who === 'A') state.nameA = input.value.trim().slice(0, 16);
-    else state.nameB = input.value.trim().slice(0, 16);
+    state.people[i].name = input.value.trim().slice(0, 16);
     applyNames();
     syncUrl();
   });
