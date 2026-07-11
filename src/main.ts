@@ -1464,12 +1464,14 @@ function syncModeUi(): void {
   (document.querySelector('#tuning-panel .bias') as HTMLElement).hidden = solo; // dial(duo) or λ(group); hidden solo
   (document.getElementById('layers-panel') as HTMLElement).hidden = solo || g; // advantage key: duo only
   (document.getElementById('swap-ab') as HTMLElement).hidden = solo || g; // swap: duo only
-  (document.getElementById('modes-b') as HTMLElement).hidden = solo;
+  // Person B's controls and Add-a-person are ALWAYS available — the pair is the
+  // baseline; near-me only hides the genuinely duo-only chrome (dial/swap/sort).
+  (document.getElementById('modes-b') as HTMLElement).hidden = false;
   (document.getElementById('sort-chips') as HTMLElement).hidden = solo || g; // A/B sorts: duo only
   const addP = document.getElementById('add-person') as HTMLElement | null;
-  if (addP) addP.hidden = solo || state.people.length >= 5;
+  if (addP) addP.hidden = state.people.length >= 5;
   const extra = document.getElementById('extra-people') as HTMLElement | null;
-  if (extra) extra.hidden = solo;
+  if (extra) extra.hidden = false;
   (document.getElementById('addr-b') as HTMLInputElement).placeholder = solo
     ? 'Add a friend to meet in the middle…'
     : 'Person B address…';
@@ -1797,7 +1799,12 @@ function removePerson(i: number): void {
 
 wirePersonName(0);
 wirePersonName(1);
-document.getElementById('add-person')!.onclick = addPerson;
+document.getElementById('add-person')!.onclick = () => {
+  // Near-me: "add a person" = bring in Person B (focus their field). Duo/group:
+  // push a new person. Never push while solo → group+solo can't collide.
+  if (state.solo) (document.getElementById('addr-b') as HTMLInputElement).focus();
+  else addPerson();
+};
 renderExtraPeople(); // rebuild rows for any people hydrated from a group share link
 syncModeUi();
 applyNames();
