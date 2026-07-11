@@ -1770,7 +1770,13 @@ function renderExtraPeople(): void {
 }
 
 function addPerson(): void {
-  if (state.people.length >= 5 || state.solo) return;
+  if (state.people.length >= 5) return;
+  if (state.solo) {
+    // Near-me → a real multi-person plan. B stops mirroring A and gets its own pin.
+    state.solo = false;
+    markers[1].addTo(map);
+    (document.getElementById('addr-b') as HTMLInputElement).value = '';
+  }
   const c = map.getCenter();
   state.people.push({ pt: { lat: c.lat, lng: c.lng }, modes: new Set<Mode>(['transit']), name: '' });
   exactCache.push(new Map());
@@ -1799,12 +1805,7 @@ function removePerson(i: number): void {
 
 wirePersonName(0);
 wirePersonName(1);
-document.getElementById('add-person')!.onclick = () => {
-  // Near-me: "add a person" = bring in Person B (focus their field). Duo/group:
-  // push a new person. Never push while solo → group+solo can't collide.
-  if (state.solo) (document.getElementById('addr-b') as HTMLInputElement).focus();
-  else addPerson();
-};
+document.getElementById('add-person')!.onclick = addPerson;
 renderExtraPeople(); // rebuild rows for any people hydrated from a group share link
 syncModeUi();
 applyNames();
