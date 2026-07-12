@@ -15,8 +15,6 @@ export interface ShareState {
   daypart?: Daypart;
   favs?: string[];
   solo?: boolean; // near-me browsing: A only, B mirrors A until set
-  extra?: { pt: Pt; mode: Mode; name: string }[]; // people beyond A/B (group mode)
-  lambda?: number; // group fairness↔efficiency, 0..1
 }
 
 const MODE_CODE: Record<Mode, string> = { transit: 's', bike: 'b', car: 'c', walk: 'w' };
@@ -27,7 +25,7 @@ const CODE_DAY: Record<string, Daypart> = { r: 'rush', m: 'midday', e: 'evening'
 const pt = (p: Pt) => `${p.lat.toFixed(5)},${p.lng.toFixed(5)}`;
 
 export function encodeShare(
-  s: Required<Omit<ShareState, 'labelA' | 'labelB' | 'nameA' | 'nameB' | 'favs' | 'solo' | 'extra' | 'lambda'>> & ShareState,
+  s: Required<Omit<ShareState, 'labelA' | 'labelB' | 'nameA' | 'nameB' | 'favs' | 'solo'>> & ShareState,
 ): string {
   const parts = [
     `a=${pt(s.a)}`,
@@ -42,13 +40,6 @@ export function encodeShare(
     `d=${DAY_CODE[s.daypart]}`,
     s.favs && s.favs.length ? `f=${s.favs.join('.')}` : '',
     s.solo ? 's=1' : '',
-    // People beyond A/B (group). a=/b= stay for back-compat; p= carries the rest.
-    s.extra && s.extra.length
-      ? // ',' and ';' are the p= delimiters — URLSearchParams decodes %-escapes
-        // before our own split, so strip them from the (cosmetic) name.
-        `p=${s.extra.map((e) => `${pt(e.pt)},${MODE_CODE[e.mode]},${encodeURIComponent(e.name.replace(/[,;]/g, ' '))}`).join(';')}`
-      : '',
-    s.extra && s.extra.length && s.lambda != null ? `l=${Math.round(s.lambda * 100)}` : '',
   ];
   return '#' + parts.filter(Boolean).join('&');
 }
@@ -87,24 +78,5 @@ export function parseShare(hash: string): ShareState {
   const f = q.get('f');
   if (f) out.favs = f.split('.').filter((id) => /^[nwrs]\d+$/.test(id)); // n/w/r = OSM, s = supplement
   if (q.get('s') === '1') out.solo = true;
-  const p = q.get('p');
-  if (p) {
-    const extra = p
-      .split(';')
-      .map((chunk) => {
-        const [lat, lng, mc, ...nameParts] = chunk.split(',');
-        const ept = parsePt(`${lat},${lng}`);
-        const mode = CODE_MODE[mc];
-        if (!ept || !mode) return null;
-        return { pt: ept, mode, name: decodeURIComponent(nameParts.join(',')).slice(0, 16).trim() };
-      })
-      .filter((e): e is { pt: Pt; mode: Mode; name: string } => e !== null);
-    if (extra.length) out.extra = extra;
-  }
-  const lRaw = q.get('l');
-  if (lRaw != null) {
-    const l = Number(lRaw);
-    if (isFinite(l) && l >= 0 && l <= 100) out.lambda = l / 100;
-  }
   return out;
 }

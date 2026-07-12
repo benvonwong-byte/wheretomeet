@@ -6,10 +6,10 @@ import subwayData from './data/subway.json';
 import { NYC_GRID, pointToCell } from './lib/geo';
 import { carDaypartMin } from './lib/modes';
 import { buildGraph, transitPath, type TransitGraph } from './lib/transit';
-import { timeField, comboLayer, minPersonField, scoreAtPoint, fairnessScore, groupScore, groupLayer } from './lib/fairness';
+import { timeField, comboLayer, minPersonField, scoreAtPoint, fairnessScore } from './lib/fairness';
 import { maskField } from './lib/contours';
 import landmaskData from './data/landmask.json';
-import { renderHeat, renderFairZone } from './lib/heat';
+import { renderHeat } from './lib/heat';
 import { filterVenues } from './lib/venues';
 import { geocode, makeSuggester, type GeoHit } from './lib/geocode';
 import { routedMinutes, routedField, routedGeometry } from './lib/osrm';
@@ -17,7 +17,7 @@ import { venueEmoji } from './lib/emoji';
 import { loadFavs, toggleFav, seedFavs } from './lib/favs';
 import { encodeShare, parseShare } from './lib/share';
 import { parseMapLink, validateSubmission } from './lib/submit';
-import type { Pt, Mode, Venue, ComboLayer, GroupLayer, TimeField, SubwayData, Daypart } from './lib/types';
+import type { Pt, Mode, Venue, ComboLayer, TimeField, SubwayData, Daypart } from './lib/types';
 
 // ── Static data ──────────────────────────────────────────────
 // venues.json = OSM-baked; supplement.json = hand-curated non-OSM spots;
@@ -64,50 +64,15 @@ const MODES: { id: Mode; label: string }[] = [
 ];
 const MODE_LABEL = Object.fromEntries(MODES.map((m) => [m.id, m.label])) as Record<Mode, string>;
 
-// Per-person identity, indexed. 0=you. Colors are distinct + map-legible.
-const SLOT = ['a', 'b', 'c', 'd', 'e'] as const;
-const slot = (i: number): string => SLOT[i] ?? String(i);
-const PERSON_COLORS = ['#4f8f00', '#7b2cbf', '#009e8f', '#e0662a', '#2f6fd0'];
-
 // ── State ────────────────────────────────────────────────────
 interface Person {
   pt: Pt;
   modes: Set<Mode>;
-  name: string;
 }
 
-// people[] is the storage (index 0 = you); A/B/nameA/nameB are back-compat
-// views over people[0..1] so the existing 2-person call sites are untouched.
-// Phase 2 grows people[] to 5 and reads it directly.
 const state = {
-  people: [
-    { pt: { lat: 40.7143, lng: -73.9614 }, modes: new Set<Mode>(['transit']), name: '' },
-    { pt: { lat: 40.787, lng: -73.9754 }, modes: new Set<Mode>(['transit']), name: '' },
-  ] as Person[],
-  get A(): Person {
-    return this.people[0];
-  },
-  set A(p: Person) {
-    this.people[0] = p;
-  },
-  get B(): Person {
-    return this.people[1];
-  },
-  set B(p: Person) {
-    this.people[1] = p;
-  },
-  get nameA(): string {
-    return this.people[0].name;
-  },
-  set nameA(v: string) {
-    this.people[0].name = v;
-  },
-  get nameB(): string {
-    return this.people[1].name;
-  },
-  set nameB(v: string) {
-    this.people[1].name = v;
-  },
+  A: { pt: { lat: 40.7143, lng: -73.9614 }, modes: new Set<Mode>(['transit']) } as Person,
+  B: { pt: { lat: 40.787, lng: -73.9754 }, modes: new Set<Mode>(['transit']) } as Person,
   emojiFilter: new Set<string>(),
   cats: new Set<Venue['cat']>(['restaurant', 'cafe', 'activity']),
   veganOnly: true, // show fully-vegan AND vegan-friendly by default (the whole vegan universe)
@@ -116,14 +81,12 @@ const state = {
   bubbleTea: false,
   glutenFree: false,
   daypart: 'midday' as Daypart,
+  nameA: '',
+  nameB: '',
   bias: 0, // minutes: negative = A gets the advantage, positive = B does
-  lambda: 0.35, // group mode: 0 = strict fairness (minimax), 1 = least total
   sortBy: 'best' as SortBy,
   solo: false, // near-me browsing: B mirrors A and stays hidden until set
 };
-
-// 1 person = near-me, 2 = duo (A/B, untouched), 3+ = group blend.
-const groupMode = (): boolean => state.people.length >= 3;
 
 // Hydrate from a shared link — the URL hash IS the plan.
 const shared = parseShare(location.hash);
@@ -137,12 +100,6 @@ if (shared.modesB?.length) state.B.modes = new Set([pickMode(shared.modesB)]);
 if (shared.nameA) state.nameA = shared.nameA;
 if (shared.nameB) state.nameB = shared.nameB;
 if (shared.bias != null) state.bias = shared.bias;
-if (shared.lambda != null) state.lambda = shared.lambda;
-if (shared.extra?.length) {
-  for (const e of shared.extra.slice(0, 3)) {
-    state.people.push({ pt: e.pt, modes: new Set([e.mode]), name: e.name });
-  }
-}
 if (shared.daypart) state.daypart = shared.daypart;
 if (shared.favs?.length) seedFavs(state.A.pt, state.B.pt, shared.favs);
 
@@ -160,8 +117,6 @@ function syncUrl(): void {
     daypart: state.daypart,
     favs: [...loadFavs(state.A.pt, state.B.pt)],
     solo: state.solo || undefined,
-    extra: state.people.slice(2).map((p) => ({ pt: p.pt, mode: [...p.modes][0], name: p.name })),
-    lambda: state.lambda,
   });
   history.replaceState(null, '', hash);
 }
@@ -170,25 +125,25 @@ const fieldCache = new Map<string, TimeField>();
 // Street modes upgrade from model estimates to real OSRM-routed fields, async.
 const fieldUpgrades = new Map<string, 'pending' | 'done'>();
 
-function getField(i: number, mode: Mode): TimeField {
+function getField(who: 'A' | 'B', mode: Mode): TimeField {
   // Transit (headway waits) and car (traffic) depend on the daypart.
-  const key = mode === 'transit' || mode === 'car' ? `${i}:${mode}:${state.daypart}` : `${i}:${mode}`;
+  const key = mode === 'transit' || mode === 'car' ? `${who}:${mode}:${state.daypart}` : `${who}:${mode}`;
   let f = fieldCache.get(key);
   if (!f) {
-    f = timeField(getGraph(state.daypart), state.people[i].pt, mode, GRID);
-    if (mode === 'car') for (let j = 0; j < f.length; j++) f[j] = carDaypartMin(f[j], state.daypart);
+    f = timeField(getGraph(state.daypart), state[who].pt, mode, GRID);
+    if (mode === 'car') for (let i = 0; i < f.length; i++) f[i] = carDaypartMin(f[i], state.daypart);
     fieldCache.set(key, f);
   }
-  if (mode !== 'transit' && !fieldUpgrades.has(key)) upgradeField(i, mode, key);
+  if (mode !== 'transit' && !fieldUpgrades.has(key)) upgradeField(who, mode, key);
   return f;
 }
 
-function upgradeField(i: number, mode: Mode, key: string): void {
+function upgradeField(who: 'A' | 'B', mode: Mode, key: string): void {
   fieldUpgrades.set(key, 'pending');
-  const pt = state.people[i].pt;
+  const pt = state[who].pt;
   const daypart = state.daypart;
   void routedField(pt, mode, GRID).then((f) => {
-    if (state.people[i].pt !== pt) return; // pin moved while routing — stale
+    if (state[who].pt !== pt) return; // pin moved while routing — stale
     if (!f) {
       fieldUpgrades.delete(key); // local server unreachable; retry on next recompute
       return;
@@ -200,9 +155,9 @@ function upgradeField(i: number, mode: Mode, key: string): void {
   });
 }
 
-function clearPersonFields(i: number): void {
-  for (const key of [...fieldCache.keys()]) if (key.startsWith(`${i}:`)) fieldCache.delete(key);
-  for (const key of [...fieldUpgrades.keys()]) if (key.startsWith(`${i}:`)) fieldUpgrades.delete(key);
+function clearPersonFields(who: 'A' | 'B'): void {
+  for (const key of [...fieldCache.keys()]) if (key.startsWith(`${who}:`)) fieldCache.delete(key);
+  for (const key of [...fieldUpgrades.keys()]) if (key.startsWith(`${who}:`)) fieldUpgrades.delete(key);
 }
 
 function activeCombos(): { a: Mode; b: Mode }[] {
@@ -233,57 +188,58 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
 
 const venueLayer = L.layerGroup().addTo(map);
 
-const personLabel = (i: number): string => state.people[i].name || String.fromCharCode(65 + i);
-const personInitial = (i: number): string => personLabel(i).charAt(0).toUpperCase();
+const personLabel = (who: 'A' | 'B'): string => (who === 'A' ? state.nameA : state.nameB) || who;
+const personInitial = (who: 'A' | 'B'): string => personLabel(who).charAt(0).toUpperCase();
 
-function bulletIcon(i: number): L.DivIcon {
+function bulletIcon(who: 'A' | 'B'): L.DivIcon {
   return L.divIcon({
     className: '',
-    html: `<div class="marker-bullet ${slot(i)}" style="background:${PERSON_COLORS[i]}">${personInitial(i)}</div>`,
+    html: `<div class="marker-bullet ${who.toLowerCase()}">${personInitial(who)}</div>`,
     iconSize: [30, 30],
     iconAnchor: [15, 15],
   });
 }
 
-function makePersonMarker(seed: number): L.Marker {
-  const marker = L.marker(state.people[seed].pt, { icon: bulletIcon(seed), draggable: true }).addTo(map);
+function makePersonMarker(who: 'A' | 'B'): L.Marker {
+  const marker = L.marker(state[who].pt, { icon: bulletIcon(who), draggable: true }).addTo(map);
   marker.on('dragend', () => {
-    const i = markers.indexOf(marker); // live index — survives add/remove splices
-    if (i < 0) return;
     const ll = marker.getLatLng();
-    state.people[i].pt = { lat: ll.lat, lng: ll.lng };
-    if (state.solo && i === 0) {
-      state.people[1].pt = state.people[0].pt;
-      exactCache[1].clear();
+    state[who].pt = { lat: ll.lat, lng: ll.lng };
+    if (state.solo && who === 'A') {
+      state.B.pt = state.A.pt;
+      exactCache.B.clear();
     }
-    clearPersonFields(i);
-    exactCache[i].clear();
-    const inp = document.getElementById(`addr-${slot(i)}`) as HTMLInputElement | null;
-    if (inp) inp.value = '';
-    coverageWarning(i);
+    clearPersonFields(who);
+    exactCache[who].clear();
+    (document.getElementById(`addr-${who.toLowerCase()}`) as HTMLInputElement).value = '';
+    coverageWarning(who);
     scheduleRecompute();
   });
   return marker;
 }
 
-const markers: L.Marker[] = state.people.map((_, i) => makePersonMarker(i)); // covers hydrated group plans
+const markers = { A: makePersonMarker('A'), B: makePersonMarker('B') };
 
 // ── Swap A ↔ B ───────────────────────────────────────────────
 function swapPersons(): void {
-  [state.people[0], state.people[1]] = [state.people[1], state.people[0]];
+  const tmp = state.A;
+  state.A = state.B;
+  state.B = tmp;
 
   // Rename cached fields instead of recomputing them.
-  const rename = (k: string) => (k.startsWith('0:') ? '1' + k.slice(1) : k.startsWith('1:') ? '0' + k.slice(1) : k);
+  const rename = (k: string) => (k.startsWith('A:') ? 'B' + k.slice(1) : k.startsWith('B:') ? 'A' + k.slice(1) : k);
   const fields = [...fieldCache].map(([k, v]) => [rename(k), v] as const);
   fieldCache.clear();
   for (const [k, v] of fields) fieldCache.set(k, v);
   const upgrades = [...fieldUpgrades].map(([k, v]) => [rename(k), v] as const);
   fieldUpgrades.clear();
   for (const [k, v] of upgrades) fieldUpgrades.set(k, v);
-  [exactCache[0], exactCache[1]] = [exactCache[1], exactCache[0]];
+  const tmpExact = exactCache.A;
+  exactCache.A = exactCache.B;
+  exactCache.B = tmpExact;
 
-  markers[0].setLatLng(state.people[0].pt);
-  markers[1].setLatLng(state.people[1].pt);
+  markers.A.setLatLng(state.A.pt);
+  markers.B.setLatLng(state.B.pt);
   const inA = document.getElementById('addr-a') as HTMLInputElement;
   const inB = document.getElementById('addr-b') as HTMLInputElement;
   [inA.value, inB.value] = [inB.value, inA.value];
@@ -294,26 +250,25 @@ function swapPersons(): void {
   const nB = document.getElementById('name-b') as HTMLInputElement;
   [nA.value, nB.value] = [nB.value, nA.value];
   applyNames();
-  renderModes(0);
-  renderModes(1);
+  renderModes('A');
+  renderModes('B');
   closeDetail();
   scheduleRecompute();
 }
 
 // ── UI: mode pills ───────────────────────────────────────────
-function renderModes(i: number): void {
-  const el = document.getElementById(`modes-${slot(i)}`);
-  if (!el) return; // person row not in the DOM (e.g. a removed group member)
+function renderModes(who: 'A' | 'B'): void {
+  const el = document.getElementById(`modes-${who.toLowerCase()}`)!;
   el.innerHTML = '';
   for (const m of MODES) {
     const btn = document.createElement('button');
-    btn.className = 'mode-pill' + (state.people[i].modes.has(m.id) ? ' on' : '');
+    btn.className = 'mode-pill' + (state[who].modes.has(m.id) ? ' on' : '');
     btn.textContent = m.label;
     btn.onclick = () => {
-      if (state.people[i].modes.has(m.id)) return;
-      state.people[i].modes = new Set([m.id]);
-      if (state.solo && i === 0) state.people[1].modes = new Set([m.id]);
-      renderModes(i);
+      if (state[who].modes.has(m.id)) return;
+      state[who].modes = new Set([m.id]);
+      if (state.solo && who === 'A') state.B.modes = new Set([m.id]);
+      renderModes(who);
       closeDetail(); // an open card would show combos for the OLD mode
       scheduleRecompute();
     };
@@ -333,8 +288,8 @@ const SORTS: { id: SortBy; label: string }[] = [
 ];
 
 function sortLabel(s: { id: SortBy; label: string }): string {
-  if (s.id === 'a') return `BEST FOR ${personLabel(0).toUpperCase()}`;
-  if (s.id === 'b') return `BEST FOR ${personLabel(1).toUpperCase()}`;
+  if (s.id === 'a') return `BEST FOR ${personLabel('A').toUpperCase()}`;
+  if (s.id === 'b') return `BEST FOR ${personLabel('B').toUpperCase()}`;
   return s.label;
 }
 
@@ -395,8 +350,8 @@ function renderDayparts(): void {
       if (state.daypart === d.id) return;
       state.daypart = d.id;
       // Refined car times are daypart-scaled — force a re-fetch at the new hour.
-      for (let i = 0; i < exactCache.length; i++) {
-        for (const k of [...exactCache[i].keys()]) if (k.startsWith('car:')) exactCache[i].delete(k);
+      for (const who of ['A', 'B'] as const) {
+        for (const k of [...exactCache[who].keys()]) if (k.startsWith('car:')) exactCache[who].delete(k);
       }
       renderDayparts();
       closeDetail();
@@ -408,51 +363,22 @@ function renderDayparts(): void {
 
 function updateBiasLabel(): void {
   const val = document.getElementById('bias-val')!;
-  if (groupMode()) {
-    val.textContent = state.lambda <= 0.15 ? 'FAIR TO ALL' : state.lambda >= 0.85 ? 'LEAST TOTAL' : 'BALANCED';
-    document.getElementById('bias-left')!.textContent = '← fair to all';
-    document.getElementById('bias-right')!.textContent = 'least total →';
-    return;
-  }
   val.textContent =
     state.bias === 0
       ? 'FAIR'
       : state.bias < 0
-        ? `${personLabel(0)} saves ${-state.bias}′`
-        : `${personLabel(1)} saves ${state.bias}′`;
-  document.getElementById('bias-left')!.textContent = `← ${personLabel(0)} advantage`;
-  document.getElementById('bias-right')!.textContent = `${personLabel(1)} advantage →`;
-}
-
-// The one slider is the directional dial in duo, the Fairness↔Efficiency λ in group.
-function configureSlider(): void {
-  const slider = document.getElementById('bias') as HTMLInputElement;
-  if (groupMode()) {
-    slider.min = '0';
-    slider.max = '100';
-    slider.step = '5';
-    slider.value = String(Math.round(state.lambda * 100));
-  } else {
-    slider.min = '-20';
-    slider.max = '20';
-    slider.step = '5';
-    slider.value = String(state.bias);
-  }
-  updateBiasLabel();
+        ? `${personLabel('A')} saves ${-state.bias}′`
+        : `${personLabel('B')} saves ${state.bias}′`;
+  document.getElementById('bias-left')!.textContent = `← ${personLabel('A')} advantage`;
+  document.getElementById('bias-right')!.textContent = `${personLabel('B')} advantage →`;
 }
 
 function wireBias(): void {
   const slider = document.getElementById('bias') as HTMLInputElement;
   slider.addEventListener('input', () => {
-    if (groupMode()) {
-      state.lambda = +slider.value / 100;
-      updateBiasLabel();
-      scheduleRecompute(true);
-    } else {
-      state.bias = +slider.value;
-      updateBiasLabel();
-      scheduleRecompute();
-    }
+    state.bias = +slider.value;
+    updateBiasLabel();
+    scheduleRecompute();
   });
 }
 
@@ -504,42 +430,42 @@ function renderDietFilters(): void {
 }
 
 // ── UI: geocode inputs with autocomplete ─────────────────────
-function coverageWarning(i: number): void {
-  const p = state.people[i].pt;
+function coverageWarning(who: 'A' | 'B'): void {
+  const p = state[who].pt;
   const outside = p.lat < GRID.latMin || p.lat > GRID.latMax || p.lng < GRID.lngMin || p.lng > GRID.lngMax;
   if (outside) {
-    setStatus(`Heads up: ${personLabel(i)} is outside NYC coverage — no subway data there, times are rough estimates`, 5000);
+    setStatus(`Heads up: ${who} is outside NYC coverage — no subway data there, times are rough estimates`, 5000);
   }
 }
 
-function warnIfOutsideCoverage(i: number, pt: Pt): void {
+function warnIfOutsideCoverage(who: 'A' | 'B', pt: Pt): void {
   const inside =
     pt.lat >= GRID.latMin && pt.lat <= GRID.latMax && pt.lng >= GRID.lngMin && pt.lng <= GRID.lngMax;
   if (!inside) {
-    setStatus(`Heads up: ${personLabel(i)} is outside NYC coverage — subway can't reach there, times are rough estimates`, 5000);
+    setStatus(`Heads up: ${who} is outside NYC coverage — subway can't reach there, times are rough estimates`, 5000);
   }
 }
 
-function applyLocation(i: number, hit: GeoHit, input: HTMLInputElement): void {
+function applyLocation(who: 'A' | 'B', hit: GeoHit, input: HTMLInputElement): void {
   input.value = hit.label;
   input.classList.remove('bad');
-  if (state.solo && i === 1) exitSolo();
-  state.people[i].pt = hit.pt;
-  if (state.solo && i === 0) {
-    state.people[1].pt = hit.pt;
-    exactCache[1].clear();
+  if (state.solo && who === 'B') exitSolo();
+  state[who].pt = hit.pt;
+  if (state.solo && who === 'A') {
+    state.B.pt = hit.pt;
+    exactCache.B.clear();
   }
-  warnIfOutsideCoverage(i, hit.pt);
-  clearPersonFields(i);
-  exactCache[i].clear();
-  markers[i].setLatLng(hit.pt);
+  warnIfOutsideCoverage(who, hit.pt);
+  clearPersonFields(who);
+  exactCache[who].clear();
+  markers[who].setLatLng(hit.pt);
   map.panTo(hit.pt);
-  coverageWarning(i);
+  coverageWarning(who);
   scheduleRecompute();
 }
 
-function wireInput(i: number): void {
-  const input = document.getElementById(`addr-${slot(i)}`) as HTMLInputElement;
+function wireInput(who: 'A' | 'B'): void {
+  const input = document.getElementById(`addr-${who.toLowerCase()}`) as HTMLInputElement;
   const drop = document.createElement('div');
   drop.className = 'suggest';
   drop.hidden = true;
@@ -563,7 +489,7 @@ function wireInput(i: number): void {
       row.onmousedown = (e) => {
         e.preventDefault(); // beat the blur
         close();
-        applyLocation(i, h, input);
+        applyLocation(who, h, input);
       };
       drop.appendChild(row);
     });
@@ -598,7 +524,7 @@ function wireInput(i: number): void {
       const picked = sel >= 0 ? hits[sel] : hits[0];
       close();
       if (picked) {
-        applyLocation(i, picked, input);
+        applyLocation(who, picked, input);
         return;
       }
       // No suggestions — precise Nominatim fallback.
@@ -609,7 +535,7 @@ function wireInput(i: number): void {
         input.classList.add('bad');
         return;
       }
-      applyLocation(i, hit, input);
+      applyLocation(who, hit, input);
     }
   });
 }
@@ -642,20 +568,13 @@ function scheduleRecompute(venuesOnly = false): void {
 }
 
 let lastLayers: ComboLayer[] = [];
-let lastGroup: GroupLayer | null = null;
 
 function recompute(venuesOnly: boolean): void {
-  if (groupMode()) {
-    // Always rebuild: fields are cached (cheap) and the glow must track λ.
-    const fields = state.people.map((p, i) => getField(i, [...p.modes][0]));
-    lastGroup = groupLayer(fields, state.lambda);
-    lastLayers = [];
-  } else if (!venuesOnly || lastLayers.length === 0) {
-    lastGroup = null;
+  if (!venuesOnly || lastLayers.length === 0) {
     const combos = activeCombos();
     lastLayers = combos.map((c) => {
-      const fA = getField(0, c.a);
-      const fB = state.solo ? fA : getField(1, c.b);
+      const fA = getField('A', c.a);
+      const fB = state.solo ? fA : getField('B', c.b);
       return comboLayer(c.a, c.b, fA, fB, state.bias);
     });
   }
@@ -674,19 +593,6 @@ let heatOverlay: L.ImageOverlay | null = null;
 let shownVenueCells: number[] = []; // grid cells of the currently listed venues
 
 function drawContours(): void {
-  if (groupMode()) {
-    // Group: single warm-green "fair zone" glow, brightest where the blend wins.
-    if (!lastGroup) return;
-    const masked = maskField(lastGroup.scores.slice(), LANDMASK);
-    const url = renderFairZone(masked, shownVenueCells, GRID).toDataURL();
-    if (!heatOverlay) {
-      heatOverlay = L.imageOverlay(url, HEAT_BOUNDS, { opacity: 0.6, className: 'glow-img', interactive: false }).addTo(map);
-    } else {
-      heatOverlay.setUrl(url);
-    }
-    heatOverlay.setOpacity(0.62);
-    return;
-  }
   if (lastLayers.length === 0) return;
   const gap = new Float32Array(CELLS);
   const minA = maskField(minPersonField(lastLayers, 'A', CELLS), LANDMASK);
@@ -764,8 +670,8 @@ function metaLine(v: Venue): string {
 const routeLayer = L.layerGroup().addTo(map);
 let routeToken = 0;
 
-async function personRoute(i: number, mode: Mode, v: Venue): Promise<{ path: Pt[]; routed: boolean }> {
-  const origin = state.people[i].pt;
+async function personRoute(who: 'A' | 'B', mode: Mode, v: Venue): Promise<{ path: Pt[]; routed: boolean }> {
+  const origin = state[who].pt;
   const dest = { lat: v.lat, lng: v.lng };
   if (mode === 'transit') return { path: transitPath(getGraph(state.daypart), origin, dest), routed: true };
   const geo = await routedGeometry(origin, dest, mode);
@@ -775,7 +681,7 @@ async function personRoute(i: number, mode: Mode, v: Venue): Promise<{ path: Pt[
 
 async function drawRoutes(v: Venue, modeA: Mode, modeB: Mode): Promise<void> {
   const token = ++routeToken;
-  const [ra, rb] = await Promise.all([personRoute(0, modeA, v), state.solo ? null : personRoute(1, modeB, v)]);
+  const [ra, rb] = await Promise.all([personRoute('A', modeA, v), state.solo ? null : personRoute('B', modeB, v)]);
   if (token !== routeToken) return; // another venue selected meanwhile
   routeLayer.clearLayers();
   const style = (color: string, mode: Mode, routed: boolean) => ({
@@ -804,9 +710,9 @@ function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB
   const rows = combos
     .map((c) =>
       state.solo
-        ? `<tr><td><span class="ca">${esc(personLabel(0))} · ${MODE_LABEL[c.modeA]}</span></td><td>${Math.round(c.tA)}′</td></tr>`
-        : `<tr><td><span class="ca">${esc(personLabel(0))} · ${MODE_LABEL[c.modeA]}</span></td><td>${Math.round(c.tA)}′</td>` +
-          `<td><span class="cb">${esc(personLabel(1))} · ${MODE_LABEL[c.modeB]}</span></td><td>${Math.round(c.tB)}′</td>` +
+        ? `<tr><td><span class="ca">${esc(personLabel('A'))} · ${MODE_LABEL[c.modeA]}</span></td><td>${Math.round(c.tA)}′</td></tr>`
+        : `<tr><td><span class="ca">${esc(personLabel('A'))} · ${MODE_LABEL[c.modeA]}</span></td><td>${Math.round(c.tA)}′</td>` +
+          `<td><span class="cb">${esc(personLabel('B'))} · ${MODE_LABEL[c.modeB]}</span></td><td>${Math.round(c.tB)}′</td>` +
           `<td class="gap">Δ${Math.round(Math.abs(c.tA - c.tB))}′</td></tr>`,
     )
     .join('');
@@ -869,7 +775,7 @@ function heatColor(t: number): string {
 // ── Exact street routing (OSRM) ──────────────────────────────
 // Model times paint the heatmap; the ranked list gets refined with real
 // street-network routing per venue. Cache: `${mode}:${venueId}` → minutes.
-const exactCache: Map<string, number | null>[] = state.people.map(() => new Map());
+const exactCache = { A: new Map<string, number | null>(), B: new Map<string, number | null>() };
 let refineToken = 0;
 
 function effectiveCombos(
@@ -878,8 +784,8 @@ function effectiveCombos(
 ): { combos: { modeA: Mode; modeB: Mode; tA: number; tB: number }[]; refined: boolean } {
   let refined = false;
   const out = combos.map((c) => {
-    const eA = exactCache[0].get(`${c.modeA}:${v.id}`);
-    const eB = exactCache[1].get(`${c.modeB}:${v.id}`);
+    const eA = exactCache.A.get(`${c.modeA}:${v.id}`);
+    const eB = exactCache.B.get(`${c.modeB}:${v.id}`);
     if (typeof eA === 'number' || typeof eB === 'number') refined = true;
     return { ...c, tA: typeof eA === 'number' ? eA : c.tA, tB: typeof eB === 'number' ? eB : c.tB };
   });
@@ -889,21 +795,21 @@ function effectiveCombos(
 async function refineVenues(venues: Venue[]): Promise<void> {
   const token = ++refineToken;
   const jobs: Promise<void>[] = [];
-  const persons = state.solo ? [0] : state.people.map((_, i) => i);
-  for (const idx of persons) {
-    for (const mode of state.people[idx].modes) {
+  const persons = state.solo ? (['A'] as const) : (['A', 'B'] as const);
+  for (const who of persons) {
+    for (const mode of state[who].modes) {
       if (mode === 'transit') continue; // GTFS engine is the authority there
-      const missing = venues.filter((v) => !exactCache[idx].has(`${mode}:${v.id}`));
+      const missing = venues.filter((v) => !exactCache[who].has(`${mode}:${v.id}`));
       if (!missing.length) continue;
       const daypart = state.daypart;
       jobs.push(
-        routedMinutes(state.people[idx].pt, missing, mode).then((mins) => {
-          if (!mins || token !== refineToken || !exactCache[idx]) return; // person removed / stale
-          missing.forEach((v, k) => {
-            const t = mins[k];
+        routedMinutes(state[who].pt, missing, mode).then((mins) => {
+          if (!mins) return;
+          missing.forEach((v, i) => {
+            const t = mins[i];
             const val = mode === 'car' && t != null ? carDaypartMin(t, daypart) : t;
-            exactCache[idx].set(`${mode}:${v.id}`, val);
-            if (state.solo) exactCache[1].set(`${mode}:${v.id}`, val); // B mirrors A
+            exactCache[who].set(`${mode}:${v.id}`, val);
+            if (state.solo) exactCache.B.set(`${mode}:${v.id}`, val); // B mirrors A
           });
         }),
       );
@@ -946,11 +852,6 @@ function renderVenues(): void {
         emoji: state.emojiFilter,
       })
     : preEmoji;
-
-  if (groupMode()) {
-    renderGroupVenues(filtered);
-    return;
-  }
 
   // Shortlist by model score with margin, then rank by the SAME times the rows
   // display (street-routed where available) so rank and readout never disagree.
@@ -1056,164 +957,6 @@ function renderVenues(): void {
   syncUrl();
 }
 
-// ── Group mode (3+ people): blend ranking, N-person rows/detail ──
-function groupVenueTimes(v: Venue): number[] {
-  const cell = pointToCell(GRID, v);
-  return state.people.map((p, i) => {
-    const mode = [...p.modes][0];
-    const ex = exactCache[i].get(`${mode}:${v.id}`);
-    if (typeof ex === 'number') return ex;
-    const f = getField(i, mode);
-    return cell >= 0 ? f[cell] : Infinity;
-  });
-}
-
-function renderGroupVenues(filtered: Venue[]): void {
-  const listEl = document.getElementById('venues')!;
-  const headEl = document.getElementById('venues-head')!;
-
-  const enriched = filtered
-    .map((v) => {
-      const times = groupVenueTimes(v);
-      const worst = Math.max(...times);
-      const total = times.reduce((a, b) => a + b, 0);
-      const refined = state.people.some((p, i) => typeof exactCache[i].get(`${[...p.modes][0]}:${v.id}`) === 'number');
-      return { v, times, worst, total, refined, finalScore: groupScore(times, state.lambda) };
-    })
-    .filter((x) => isFinite(x.worst) && x.finalScore > 0.001);
-
-  const minWorst = enriched.reduce((m, x) => Math.min(m, x.worst), Infinity);
-  const scored = enriched
-    .filter((x) => x.worst <= minWorst + 12) // fair spots only: nobody stuck far
-    .sort((x, y) => y.finalScore - x.finalScore)
-    .slice(0, 40);
-
-  headEl.textContent = `Fair for all ${state.people.length} · ${scored.length}`;
-
-  if (!scored.length) {
-    listEl.innerHTML = `<li class="empty">No spot works for everyone yet — try walk/bike modes or move a pin.</li>`;
-    shownVenueCells = [];
-    drawContours();
-    renderShortlist(loadFavs(state.A.pt, state.B.pt));
-    syncUrl();
-    return;
-  }
-
-  const favs = loadFavs(state.A.pt, state.B.pt);
-  const ordered = [...scored.filter((x) => favs.has(x.v.id)), ...scored.filter((x) => !favs.has(x.v.id))];
-  const maxScore = Math.max(...scored.map((x) => x.finalScore)) || 1;
-
-  for (const { v, times, worst, total, refined, finalScore } of ordered) {
-    const isFav = favs.has(v.id);
-    const ring = isFav ? '#ff2d78' : v.vegan === 2 ? '#00e05c' : v.vegan === 1 ? '#7dedaa' : '#fff';
-    const pin = L.marker([v.lat, v.lng], {
-      icon: L.divIcon({
-        className: '',
-        html: `<div class="venue-pin${v.rating != null && v.rating >= 4.5 ? ' top-rated' : ''}" style="background:${heatColor(finalScore / maxScore)};border-color:${ring}">${venueEmoji(v)}${v.vegan === 2 ? '<span class="pin-leaf">🌱</span>' : ''}${isFav ? '<span class="pin-fav">♥</span>' : ''}</div>`,
-        iconSize: [26, 26],
-        iconAnchor: [13, 13],
-      }),
-    }).addTo(venueLayer);
-    pin.on('click', () => showGroupDetail(v, times));
-
-    const li = document.createElement('li');
-    if (isFav) li.className = 'faved';
-    const meta = metaLine(v);
-    li.innerHTML =
-      `<span class="v-name">${venueEmoji(v)} ${esc(v.name)}</span>` +
-      `<span class="v-side"><button class="fav-btn${isFav ? ' on' : ''}" title="favorite for this group">♥</button>` +
-      `<span class="v-times">${refined ? '<span class="routed">⚡</span>' : ''}<b class="ta">${Math.round(worst)}′</b><span class="v-total"> longest · ${Math.round(total)}′ total</span></span></span>` +
-      (meta ? `<span class="v-meta">${meta}</span>` : '') +
-      `<span class="v-tags">${venueTags(v)}</span>`;
-    li.querySelector<HTMLButtonElement>('.fav-btn')!.onclick = (e) => {
-      e.stopPropagation();
-      toggleFav(state.A.pt, state.B.pt, v.id);
-      renderVenues();
-    };
-    li.onclick = () => {
-      map.setView([v.lat, v.lng], Math.max(map.getZoom(), 14));
-      showGroupDetail(v, times);
-    };
-    listEl.appendChild(li);
-  }
-
-  void refineVenues(scored.map((x) => x.v));
-  shownVenueCells = scored.map((x) => pointToCell(GRID, x.v));
-  drawContours();
-  renderShortlist(favs);
-  syncUrl();
-}
-
-async function drawGroupRoutes(v: Venue): Promise<void> {
-  const token = ++routeToken;
-  const legs = await Promise.all(state.people.map((p, i) => personRoute(i, [...p.modes][0], v)));
-  if (token !== routeToken) return;
-  routeLayer.clearLayers();
-  legs.forEach((leg, i) => {
-    const mode = [...state.people[i].modes][0];
-    L.polyline(leg.path, {
-      color: PERSON_COLORS[i],
-      weight: leg.routed ? 4 : 3,
-      opacity: leg.routed ? 0.85 : 0.45,
-      dashArray: mode === 'transit' ? '2 8' : leg.routed ? undefined : '10 10',
-      lineCap: 'round' as const,
-    }).addTo(routeLayer);
-  });
-}
-
-function showGroupDetail(v: Venue, times: number[]): void {
-  const worst = Math.max(...times);
-  const total = times.reduce((a, b) => a + b, 0);
-  const rows = state.people
-    .map((p, i) => {
-      const t = times[i];
-      const far = isFinite(t) && t === worst && state.people.length > 1;
-      return `<tr${far ? ' class="far"' : ''}><td><span class="cg" style="color:${PERSON_COLORS[i]}">${esc(personLabel(i))} · ${MODE_LABEL[[...p.modes][0]]}</span></td><td>${isFinite(t) ? Math.round(t) + '′' : '—'}</td></tr>`;
-    })
-    .join('');
-  const summary = `<tr class="g-sum"><td>Longest ${Math.round(worst)}′</td><td>${Math.round(total)}′ total</td></tr>`;
-  const metaBits: string[] = [];
-  if (v.price) metaBits.push(`<span class="price">${'$'.repeat(v.price)}</span>`);
-  if (v.cuisine) metaBits.push(esc(v.cuisine.split(';')[0].replace(/_/g, ' ')));
-  const meta = metaBits.join(' · ');
-  const ratingRow =
-    v.rating != null
-      ? `<div class="detail-rating"><span class="stars">${'★'.repeat(Math.round(v.rating))}${'☆'.repeat(5 - Math.round(v.rating))}</span> <b>${v.rating.toFixed(1)}</b>${v.ratings ? ` · ${v.ratings.toLocaleString()} reviews` : ''}</div>`
-      : `<div class="detail-rating none"><span class="stars">☆☆☆☆☆</span> not yet rated</div>`;
-  const isFav = loadFavs(state.A.pt, state.B.pt).has(v.id);
-  detailEl.innerHTML =
-    `<button class="detail-close" aria-label="Close">✕</button>` +
-    `<button class="fav-btn detail-fav${isFav ? ' on' : ''}" title="favorite for this group">♥</button>` +
-    (v.img ? `<img class="detail-img" src="${esc(v.img)}" alt="" onerror="this.remove()" />` : '') +
-    `<div class="detail-body">` +
-    `<h3>${venueEmoji(v)} ${esc(v.name)}</h3>` +
-    ratingRow +
-    (meta ? `<div class="detail-meta">${meta}</div>` : '') +
-    `<div class="detail-tags">${venueTags(v)}</div>` +
-    (v.desc ? `<p class="detail-desc">${esc(v.desc)}</p>` : '') +
-    `<div class="detail-facts">` +
-    (v.addr ? `<div>📍 ${esc(v.addr)}</div>` : '') +
-    (v.tel ? `<div>📞 ${esc(v.tel)}</div>` : '') +
-    `</div>` +
-    `<table class="detail-times group">${rows}${summary}</table>` +
-    `<div class="detail-links">` +
-    (v.web ? `<a href="${esc(v.web)}" target="_blank" rel="noopener">Website ↗</a>` : '') +
-    `<a href="${gmaps(v)}" target="_blank" rel="noopener">Google Maps ↗</a>` +
-    `</div></div>`;
-  detailEl.hidden = false;
-  void drawGroupRoutes(v);
-  if (IS_MOBILE) {
-    sheetTo('half');
-    map.panInside([v.lat, v.lng], { paddingTopLeft: [24, 130], paddingBottomRight: [24, Math.round(window.innerHeight * 0.55)] });
-  }
-  detailEl.querySelector<HTMLButtonElement>('.detail-close')!.onclick = closeDetail;
-  detailEl.querySelector<HTMLButtonElement>('.detail-fav')!.onclick = () => {
-    toggleFav(state.A.pt, state.B.pt, v.id);
-    renderVenues();
-    showGroupDetail(v, times);
-  };
-}
-
 
 // ── Emoji legend (map side) — tap to filter by venue type ────
 function renderEmojiLegend(counts: Map<string, number>): void {
@@ -1248,19 +991,16 @@ function renderShortlist(favs: Set<string>): void {
   panel.querySelector('h3')!.innerHTML = `♥ Your shortlist (${items.length}) <span class="sl-caret">▾</span>`;
   list.innerHTML = '';
   for (const v of items) {
-    const group = groupMode();
-    const s = group ? null : scoreAtPoint(GRID, lastLayers, v);
+    const s = scoreAtPoint(GRID, lastLayers, v);
     const combos = s ? effectiveCombos(v, s.combos).combos : [];
     const best = combos.length ? pickCombo(combos, state.sortBy) : null;
-    const gtimes = group ? groupVenueTimes(v) : null;
     const li = document.createElement('li');
-    const gworst = group ? Math.max(...gtimes!) : 0;
-    const times = group
-      ? `<span class="sl-times"><b class="ta">${isFinite(gworst) ? Math.round(gworst) + '′' : '—'}</b></span>`
-      : best
+    li.innerHTML =
+      `<span class="sl-name">${venueEmoji(v)} ${esc(v.name)}</span>` +
+      (best
         ? `<span class="sl-times">${state.solo ? `<b class="ta">${Math.round(best.tA)}′</b>` : `<b class="ta">${Math.round(best.tA)}′</b>/<b class="tb">${Math.round(best.tB)}′</b>`}</span>`
-        : '';
-    li.innerHTML = `<span class="sl-name">${venueEmoji(v)} ${esc(v.name)}</span>` + times + `<button class="sl-remove" title="remove">✕</button>`;
+        : '') +
+      `<button class="sl-remove" title="remove">✕</button>`;
     li.querySelector<HTMLButtonElement>('.sl-remove')!.onclick = (e) => {
       e.stopPropagation();
       toggleFav(state.A.pt, state.B.pt, v.id);
@@ -1268,8 +1008,7 @@ function renderShortlist(favs: Set<string>): void {
     };
     li.onclick = () => {
       map.setView([v.lat, v.lng], Math.max(map.getZoom(), 14));
-      if (group) showGroupDetail(v, gtimes!);
-      else if (s) showDetail(v, effectiveCombos(v, s.combos).combos);
+      if (s) showDetail(v, effectiveCombos(v, s.combos).combos);
     };
     list.appendChild(li);
   }
@@ -1310,8 +1049,6 @@ function buildMobileLayout(): void {
   editor.hidden = true;
   editor.appendChild(document.querySelector('.person[data-person="A"]')!);
   editor.appendChild(document.querySelector('.person[data-person="B"]')!);
-  editor.appendChild(document.getElementById('extra-people')!);
-  editor.appendChild(document.getElementById('add-person')!);
   editor.appendChild(document.getElementById('tuning-panel')!);
   const done = document.createElement('button');
   done.id = 'plan-done';
@@ -1443,11 +1180,9 @@ function buildMobileLayout(): void {
     const va = (document.getElementById('addr-a') as HTMLInputElement).value.trim();
     const vb = (document.getElementById('addr-b') as HTMLInputElement).value.trim();
     const mode = MODE_LABEL[[...state.A.modes][0]].toLowerCase();
-    sum.textContent = groupMode()
-      ? `${state.people.length} people \u00b7 fair zone`
-      : state.solo
-        ? `${va || 'Set your location'} \u00b7 ${mode}`
-        : `${personLabel(0)}: ${va || 'set address'} \u2194 ${personLabel(1)}: ${vb || 'set address'}`;
+    sum.textContent = state.solo
+      ? `${va || 'Set your location'} \u00b7 ${mode}`
+      : `${personLabel('A')}: ${va || 'set address'} \u2194 ${personLabel('B')}: ${vb || 'set address'}`;
     bInvite.hidden = !state.solo;
   };
 
@@ -1457,67 +1192,50 @@ function buildMobileLayout(): void {
 }
 
 // ── Solo mode: "what's vegan near me" — A only, B joins later ─
-// One authority for mode-dependent chrome. solo (1) / duo (2) / group (3+).
-function syncModeUi(): void {
-  const g = groupMode();
-  const solo = state.solo && !g;
-  (document.querySelector('#tuning-panel .bias') as HTMLElement).hidden = solo; // dial(duo) or λ(group); hidden solo
-  (document.getElementById('layers-panel') as HTMLElement).hidden = solo || g; // advantage key: duo only
-  (document.getElementById('swap-ab') as HTMLElement).hidden = solo || g; // swap: duo only
-  // Person B's controls and Add-a-person are ALWAYS available — the pair is the
-  // baseline; near-me only hides the genuinely duo-only chrome (dial/swap/sort).
-  (document.getElementById('modes-b') as HTMLElement).hidden = false;
-  (document.getElementById('sort-chips') as HTMLElement).hidden = solo || g; // A/B sorts: duo only
-  const addP = document.getElementById('add-person') as HTMLElement | null;
-  if (addP) addP.hidden = state.people.length >= 5;
-  const extra = document.getElementById('extra-people') as HTMLElement | null;
-  if (extra) extra.hidden = false;
-  (document.getElementById('addr-b') as HTMLInputElement).placeholder = solo
+function soloUi(on: boolean): void {
+  (document.querySelector('#tuning-panel .bias') as HTMLElement).hidden = on;
+  (document.getElementById('layers-panel') as HTMLElement).hidden = on;
+  (document.getElementById('swap-ab') as HTMLElement).hidden = on;
+  (document.getElementById('modes-b') as HTMLElement).hidden = on;
+  (document.getElementById('sort-chips') as HTMLElement).hidden = on;
+  (document.getElementById('addr-b') as HTMLInputElement).placeholder = on
     ? 'Add a friend to meet in the middle…'
     : 'Person B address…';
-  (document.getElementById('addr-a') as HTMLInputElement).placeholder = solo
+  (document.getElementById('addr-a') as HTMLInputElement).placeholder = on
     ? '📍 Your location or an address…'
     : 'Person A address…';
-  configureSlider();
 }
-const soloUi = (_on: boolean): void => syncModeUi();
 
 function enterSolo(pt: Pt, label: string, forceWalk: boolean): void {
-  state.people.length = 2; // collapse any group back to A/B before going near-me
-  while (markers.length > 2) map.removeLayer(markers.pop()!); // drop orphan C/D/E pins
-  exactCache.length = 2;
-  lastGroup = null;
-  refineToken++; // invalidate any in-flight group refine
-  renderExtraPeople(); // clear the group rows from the DOM
   state.solo = true;
-  state.people[0].pt = pt;
-  state.people[1].pt = pt;
+  state.A.pt = pt;
+  state.B.pt = pt;
   if (forceWalk) {
-    state.people[0].modes = new Set(['walk']);
-    state.people[1].modes = new Set(['walk']);
+    state.A.modes = new Set(['walk']);
+    state.B.modes = new Set(['walk']);
   }
   (document.getElementById('addr-a') as HTMLInputElement).value = label;
   (document.getElementById('addr-b') as HTMLInputElement).value = '';
-  clearPersonFields(0);
-  clearPersonFields(1);
-  exactCache[0].clear();
-  exactCache[1].clear();
-  markers[0].setLatLng(pt);
-  map.removeLayer(markers[1]);
+  clearPersonFields('A');
+  clearPersonFields('B');
+  exactCache.A.clear();
+  exactCache.B.clear();
+  markers.A.setLatLng(pt);
+  map.removeLayer(markers.B);
   soloUi(true);
-  renderModes(0);
+  renderModes('A');
   closeDetail();
   map.setView(pt, 15);
   if (IS_MOBILE) sheetTo('peek'); // nearby-first: the map and its glow lead
-  coverageWarning(0);
+  coverageWarning('A');
   scheduleRecompute();
 }
 
 function exitSolo(): void {
   state.solo = false;
-  markers[1].addTo(map);
+  markers.B.addTo(map);
   soloUi(false);
-  renderModes(1);
+  renderModes('B');
 }
 
 function locateMe(): void {
@@ -1678,15 +1396,15 @@ function buildSubmitUi(): void {
 
 // ── Boot ─────────────────────────────────────────────────────
 buildSubmitUi();
-renderModes(0);
-renderModes(1);
+renderModes('A');
+renderModes('B');
 renderDayparts();
 wireBias();
 renderCatFilters();
 renderDietFilters();
 renderSortChips();
-wireInput(0);
-wireInput(1);
+wireInput('A');
+wireInput('B');
 
 // Restore shared-link UI state (labels, dial position).
 if (shared.labelA) (document.getElementById('addr-a') as HTMLInputElement).value = shared.labelA;
@@ -1710,25 +1428,25 @@ if (shared.solo && shared.a) {
 }
 
 function applyNames(): void {
-  for (let i = 0; i < state.people.length; i++) {
-    const b = document.getElementById(`bullet-${slot(i)}`);
-    if (b) {
-      b.textContent = personInitial(i);
-      b.title = state.people[i].name ? `${state.people[i].name} — click to rename` : 'Click to add a name';
-    }
-    if (markers[i]) markers[i].setIcon(bulletIcon(i));
-  }
-  document.querySelector('.adv-labels .adv-a')!.textContent = `${personLabel(0)} sooner`;
-  document.querySelector('.adv-labels .adv-b')!.textContent = `${personLabel(1)} sooner`;
+  const ba = document.getElementById('bullet-a')!;
+  const bb = document.getElementById('bullet-b')!;
+  ba.textContent = personInitial('A');
+  bb.textContent = personInitial('B');
+  ba.title = state.nameA ? `${state.nameA} — click to rename` : 'Click to add a name';
+  bb.title = state.nameB ? `${state.nameB} — click to rename` : 'Click to add a name';
+  markers.A.setIcon(bulletIcon('A'));
+  markers.B.setIcon(bulletIcon('B'));
+  document.querySelector('.adv-labels .adv-a')!.textContent = `${personLabel('A')} sooner`;
+  document.querySelector('.adv-labels .adv-b')!.textContent = `${personLabel('B')} sooner`;
   updateBiasLabel();
   renderSortChips();
 }
 
-// Name editing for one person row (bullet click → inline input).
-function wirePersonName(i: number): void {
-  const input = document.getElementById(`name-${slot(i)}`) as HTMLInputElement;
-  const bullet = document.getElementById(`bullet-${slot(i)}`)!;
-  input.value = state.people[i].name;
+for (const who of ['A', 'B'] as const) {
+  const input = document.getElementById(`name-${who.toLowerCase()}`) as HTMLInputElement;
+  const bullet = document.getElementById(`bullet-${who.toLowerCase()}`)!;
+  input.value = who === 'A' ? state.nameA : state.nameB;
+  // Click the bullet to name the person; Enter/blur commits and restores it.
   bullet.addEventListener('click', () => {
     input.classList.add('editing');
     input.focus();
@@ -1739,75 +1457,12 @@ function wirePersonName(i: number): void {
     if (e.key === 'Enter' || e.key === 'Escape') input.blur();
   });
   input.addEventListener('input', () => {
-    state.people[i].name = input.value.trim().slice(0, 16);
+    if (who === 'A') state.nameA = input.value.trim().slice(0, 16);
+    else state.nameB = input.value.trim().slice(0, 16);
     applyNames();
     syncUrl();
   });
 }
-
-// ── Group members: dynamic person rows for people[2..] ───────
-function renderExtraPeople(): void {
-  const box = document.getElementById('extra-people');
-  if (!box) return;
-  box.innerHTML = '';
-  for (let i = 2; i < state.people.length; i++) {
-    const sec = document.createElement('section');
-    sec.className = 'person extra';
-    sec.dataset.person = slot(i);
-    sec.innerHTML =
-      `<div class="person-head">` +
-      `<span class="bullet" id="bullet-${slot(i)}" style="background:${PERSON_COLORS[i]}">${personInitial(i)}</span>` +
-      `<input id="name-${slot(i)}" class="pname" type="text" maxlength="14" placeholder="Name" autocomplete="off" />` +
-      `<input id="addr-${slot(i)}" type="text" placeholder="Person ${personInitial(i)} address…" autocomplete="off" />` +
-      `<button class="person-remove" title="remove this person">✕</button>` +
-      `</div><div class="modes" id="modes-${slot(i)}"></div>`;
-    box.appendChild(sec);
-    renderModes(i);
-    wireInput(i);
-    wirePersonName(i);
-    sec.querySelector<HTMLButtonElement>('.person-remove')!.onclick = () => removePerson(i);
-  }
-}
-
-function addPerson(): void {
-  if (state.people.length >= 5) return;
-  if (state.solo) {
-    // Near-me → a real multi-person plan. B stops mirroring A and gets its own pin.
-    state.solo = false;
-    markers[1].addTo(map);
-    (document.getElementById('addr-b') as HTMLInputElement).value = '';
-  }
-  const c = map.getCenter();
-  state.people.push({ pt: { lat: c.lat, lng: c.lng }, modes: new Set<Mode>(['transit']), name: '' });
-  exactCache.push(new Map());
-  markers.push(makePersonMarker(state.people.length - 1)); // push doesn't shift existing indices
-  renderExtraPeople();
-  applyNames();
-  syncModeUi();
-  scheduleRecompute();
-}
-
-function removePerson(i: number): void {
-  if (i < 2 || state.people.length <= 2) return; // A/B are permanent; floor is duo
-  state.people.splice(i, 1);
-  const [m] = markers.splice(i, 1);
-  map.removeLayer(m);
-  exactCache.splice(i, 1);
-  fieldCache.clear(); // index-keyed keys are now stale (indices shifted down)
-  fieldUpgrades.clear();
-  refineToken++; // any in-flight refine now targets a wrong/removed index
-  lastGroup = null;
-  renderExtraPeople();
-  applyNames();
-  syncModeUi();
-  scheduleRecompute();
-}
-
-wirePersonName(0);
-wirePersonName(1);
-document.getElementById('add-person')!.onclick = addPerson;
-renderExtraPeople(); // rebuild rows for any people hydrated from a group share link
-syncModeUi();
 applyNames();
 
 document.getElementById('swap-ab')!.onclick = swapPersons;

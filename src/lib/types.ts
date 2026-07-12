@@ -63,9 +63,3 @@ export interface ComboLayer {
   timesA: TimeField;
   timesB: TimeField;
 }
-
-/** Group (3+ people) score layer: one score per cell, N per-person fields. */
-export interface GroupLayer {
-  scores: Float32Array;
-  times: TimeField[];
-}

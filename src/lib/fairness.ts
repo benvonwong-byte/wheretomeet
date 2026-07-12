@@ -1,6 +1,6 @@
 import { cellCenter, pointToCell } from './geo';
 import { directTimeMin } from './modes';
-import type { Pt, Mode, GridSpec, TimeField, ComboLayer, GroupLayer } from './types';
+import type { Pt, Mode, GridSpec, TimeField, ComboLayer } from './types';
 import { transitField, type TransitGraph } from './transit';
 
 // Score = shortest TOTAL time first (get together fast), damped by the
@@ -22,38 +22,6 @@ export function fairnessScore(tA: number, tB: number, bias = 0): number {
   const excess = Math.max(0, Math.abs(tA - tB - bias) - EVEN_ALLOWANCE);
   const total = tA + tB;
   return Math.exp(-total / TOTAL_TIME_SCALE) * Math.exp(-((excess / EXCESS_SOFTNESS) ** 2));
-}
-
-// ── Group fairness (3+ people) ───────────────────────────────
-// A spot's cost blends the worst single trip (fairness) with the mean trip
-// (efficiency). λ 0 = pure minimax (protect the person coming from far),
-// λ 1 = pure efficiency (lowest total). score decays like the 2-person one.
-const GROUP_SCALE = 35;
-
-export function groupScore(times: number[], lambda: number): number {
-  if (!times.length) return 0;
-  let worst = 0;
-  let sum = 0;
-  for (const t of times) {
-    if (!isFinite(t)) return 0; // someone can't reach → not a group option
-    if (t > worst) worst = t;
-    sum += t;
-  }
-  const mean = sum / times.length;
-  const cost = (1 - lambda) * worst + lambda * mean;
-  return Math.exp(-cost / GROUP_SCALE);
-}
-
-/** Per-cell group score over N person time-fields (all same length). */
-export function groupLayer(fields: TimeField[], lambda: number): GroupLayer {
-  const cells = fields[0].length;
-  const scores = new Float32Array(cells);
-  const row = new Array<number>(fields.length);
-  for (let i = 0; i < cells; i++) {
-    for (let p = 0; p < fields.length; p++) row[p] = fields[p][i];
-    scores[i] = groupScore(row, lambda);
-  }
-  return { scores, times: fields };
 }
 
 export function timeField(graph: TransitGraph, origin: Pt, mode: Mode, grid: GridSpec): TimeField {
