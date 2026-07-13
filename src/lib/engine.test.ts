@@ -340,6 +340,47 @@ describe('share links', () => {
     expect(s.favs).toEqual(['s1', 'n42', 's2']);
   });
 
+  it('round-trips group extras with %, commas, and semicolons in names/labels', () => {
+    const hash = encodeShare({
+      a: { lat: 40.7143, lng: -73.9614 },
+      b: { lat: 40.787, lng: -73.9754 },
+      modesA: ['walk'],
+      modesB: ['transit'],
+      bias: 0,
+      daypart: 'midday',
+      extra: [
+        { pt: { lat: 40.7036, lng: -73.9264 }, mode: 'transit', name: '10% Sam', label: '245 Varet St, Brooklyn; NY' },
+        { pt: { lat: 40.75, lng: -73.99 }, mode: 'bike', name: '', label: '' },
+      ],
+      lambda: 0.4,
+    });
+    const s = parseShare(hash);
+    expect(s.extra?.length).toBe(2);
+    expect(s.extra![0].name).toBe('10% Sam'); // % survives — no double-decode URIError
+    expect(s.extra![0].label).toBe('245 Varet St, Brooklyn; NY'); // delimiters survive intact
+    expect(s.extra![1].pt.lat).toBeCloseTo(40.75, 4);
+    expect(s.lambda).toBeCloseTo(0.4, 5);
+  });
+
+  it('a malformed hash never throws — parseShare returns a safe empty state', () => {
+    expect(() => parseShare('#p=%%%garbage%%%&a=%E0%A4%A')).not.toThrow();
+    expect(parseShare('#p=%%%garbage%%%')).toEqual({});
+  });
+
+  it('solo (1-person) links encode without b= and parse back to solo', () => {
+    const hash = encodeShare({
+      a: { lat: 40.7306, lng: -73.9866 },
+      modesA: ['walk'],
+      bias: 0,
+      daypart: 'midday',
+      solo: true,
+    });
+    expect(hash).not.toContain('b=');
+    const s = parseShare(hash);
+    expect(s.solo).toBe(true);
+    expect(s.a!.lat).toBeCloseTo(40.7306, 4);
+  });
+
   it('round-trips the full plan through the hash', () => {
     const hash = encodeShare({
       a: { lat: 40.7143, lng: -73.9614 },
