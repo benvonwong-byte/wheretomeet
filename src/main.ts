@@ -6,10 +6,10 @@ import subwayData from './data/subway.json';
 import { NYC_GRID, pointToCell } from './lib/geo';
 import { carDaypartMin } from './lib/modes';
 import { buildGraph, transitPath, type TransitGraph } from './lib/transit';
-import { timeField, comboLayer, minPersonField, scoreAtPoint, fairnessScore } from './lib/fairness';
+import { timeField, comboLayer, minPersonField, scoreAtPoint, fairnessScore, groupScore, groupLayer } from './lib/fairness';
 import { maskField } from './lib/contours';
 import landmaskData from './data/landmask.json';
-import { renderHeat } from './lib/heat';
+import { renderHeat, renderGroupHeat } from './lib/heat';
 import { filterVenues } from './lib/venues';
 import { geocode, makeSuggester, type GeoHit } from './lib/geocode';
 import { routedMinutes, routedField, routedGeometry } from './lib/osrm';
@@ -17,7 +17,7 @@ import { venueEmoji } from './lib/emoji';
 import { loadFavs, toggleFav, seedFavs } from './lib/favs';
 import { encodeShare, parseShare } from './lib/share';
 import { parseMapLink, validateSubmission } from './lib/submit';
-import type { Pt, Mode, Venue, ComboLayer, TimeField, SubwayData, Daypart } from './lib/types';
+import type { Pt, Mode, Venue, ComboLayer, GroupLayer, TimeField, SubwayData, Daypart } from './lib/types';
 
 // ── Static data ──────────────────────────────────────────────
 // venues.json = OSM-baked; supplement.json = hand-curated non-OSM spots;
@@ -64,15 +64,36 @@ const MODES: { id: Mode; label: string }[] = [
 ];
 const MODE_LABEL = Object.fromEntries(MODES.map((m) => [m.id, m.label])) as Record<Mode, string>;
 
+// Slot identity follows the position in the plan: colors + letters are per
+// SLOT (A green, B purple, …); people keep their own id for caches/markers.
+const SLOT = ['a', 'b', 'c', 'd', 'e'] as const;
+const PERSON_COLORS = ['#4f8f00', '#7b2cbf', '#009e8f', '#e0662a', '#2f6fd0'];
+const PERSON_RGB: [number, number, number][] = [
+  [79, 143, 0],
+  [123, 44, 191],
+  [0, 158, 143],
+  [224, 102, 42],
+  [47, 111, 208],
+];
+const MAX_PEOPLE = 5;
+
 // ── State ────────────────────────────────────────────────────
+// One source of truth. Every person has a stable id (never reused, never
+// shifted by add/remove); caches and markers key on it. The DOM and the map
+// are projections, rebuilt by renderPeople() after any roster change.
 interface Person {
+  id: number;
   pt: Pt;
-  modes: Set<Mode>;
+  mode: Mode;
+  name: string; // short display name (bullet click to edit)
+  label: string; // committed address text — lives HERE, not in the DOM
 }
 
+let nextPersonId = 1;
+const newPerson = (pt: Pt, mode: Mode): Person => ({ id: nextPersonId++, pt, mode, name: '', label: '' });
+
 const state = {
-  A: { pt: { lat: 40.7143, lng: -73.9614 }, modes: new Set<Mode>(['transit']) } as Person,
-  B: { pt: { lat: 40.787, lng: -73.9754 }, modes: new Set<Mode>(['transit']) } as Person,
+  people: [newPerson({ lat: 40.7143, lng: -73.9614 }, 'walk')],
   emojiFilter: new Set<string>(),
   cats: new Set<Venue['cat']>(['restaurant', 'cafe', 'activity']),
   veganOnly: true, // show fully-vegan AND vegan-friendly by default (the whole vegan universe)
@@ -81,96 +102,121 @@ const state = {
   bubbleTea: false,
   glutenFree: false,
   daypart: 'midday' as Daypart,
-  nameA: '',
-  nameB: '',
-  bias: 0, // minutes: negative = A gets the advantage, positive = B does
+  bias: 0, // duo: minutes; negative = person A gets the advantage
+  lambda: 0.35, // group: 0 = fair to all (minimax), 1 = least total
   sortBy: 'best' as SortBy,
-  solo: false, // near-me browsing: B mirrors A and stays hidden until set
 };
 
-// Hydrate from a shared link — the URL hash IS the plan.
+const nPeople = () => state.people.length;
+const isSolo = () => nPeople() === 1;
+const isDuo = () => nPeople() === 2;
+const isGroup = () => nPeople() >= 3;
+const personById = (id: number): Person | undefined => state.people.find((p) => p.id === id);
+const personLabel = (i: number): string => state.people[i]?.name || String.fromCharCode(65 + i);
+const personInitial = (i: number): string => personLabel(i).charAt(0).toUpperCase();
+
+// ── Hydrate from a shared link — the URL hash IS the plan ────
 const shared = parseShare(location.hash);
-if (shared.a) state.A.pt = shared.a;
-if (shared.b) state.B.pt = shared.b;
-// One mode per person now; old multi-mode links collapse by a fixed priority
-// (MODES order), not the sharer's arbitrary toggle order.
-const pickMode = (ms: Mode[]): Mode => MODES.find((m) => ms.includes(m.id))?.id ?? ms[0];
-if (shared.modesA?.length) state.A.modes = new Set([pickMode(shared.modesA)]);
-if (shared.modesB?.length) state.B.modes = new Set([pickMode(shared.modesB)]);
-if (shared.nameA) state.nameA = shared.nameA;
-if (shared.nameB) state.nameB = shared.nameB;
-if (shared.bias != null) state.bias = shared.bias;
-if (shared.daypart) state.daypart = shared.daypart;
-if (shared.favs?.length) seedFavs(state.A.pt, state.B.pt, shared.favs);
+const pickMode = (ms: Mode[] | undefined, fallback: Mode): Mode =>
+  ms?.length ? (MODES.find((m) => ms.includes(m.id))?.id ?? ms[0]) : fallback;
+{
+  const p0 = state.people[0];
+  if (shared.a) {
+    p0.pt = shared.a;
+    p0.label = shared.labelA ?? '';
+  }
+  p0.mode = pickMode(shared.modesA, shared.a ? 'transit' : p0.mode);
+  if (shared.nameA) p0.name = shared.nameA;
+  if (shared.b && !shared.solo) {
+    const p1 = newPerson(shared.b, pickMode(shared.modesB, 'transit'));
+    p1.label = shared.labelB ?? '';
+    if (shared.nameB) p1.name = shared.nameB;
+    state.people.push(p1);
+  }
+  if (shared.extra && !shared.solo) {
+    for (const e of shared.extra.slice(0, MAX_PEOPLE - state.people.length)) {
+      const p = newPerson(e.pt, e.mode);
+      p.name = e.name;
+      p.label = e.label;
+      state.people.push(p);
+    }
+  }
+  if (shared.bias != null) state.bias = shared.bias;
+  if (shared.lambda != null) state.lambda = shared.lambda;
+  if (shared.daypart) state.daypart = shared.daypart;
+}
+
+// Favorites are keyed by the first two pins (near-me keys on yourself).
+const favPts = (): [Pt, Pt] => [state.people[0].pt, (state.people[1] ?? state.people[0]).pt];
+if (shared.favs?.length) seedFavs(...favPts(), shared.favs);
 
 function syncUrl(): void {
+  const [p0, p1] = state.people;
   const hash = encodeShare({
-    a: state.A.pt,
-    b: state.B.pt,
-    labelA: (document.getElementById('addr-a') as HTMLInputElement).value || undefined,
-    labelB: (document.getElementById('addr-b') as HTMLInputElement).value || undefined,
-    nameA: state.nameA || undefined,
-    nameB: state.nameB || undefined,
-    modesA: [...state.A.modes],
-    modesB: [...state.B.modes],
+    a: p0.pt,
+    b: p1?.pt,
+    labelA: p0.label || undefined,
+    labelB: p1?.label || undefined,
+    nameA: p0.name || undefined,
+    nameB: p1?.name || undefined,
+    modesA: [p0.mode],
+    modesB: p1 ? [p1.mode] : undefined,
     bias: state.bias,
     daypart: state.daypart,
-    favs: [...loadFavs(state.A.pt, state.B.pt)],
-    solo: state.solo || undefined,
+    favs: [...loadFavs(...favPts())],
+    solo: isSolo() || undefined,
+    extra: state.people.slice(2).map((p) => ({ pt: p.pt, mode: p.mode, name: p.name, label: p.label })),
+    lambda: isGroup() ? state.lambda : undefined,
   });
   history.replaceState(null, '', hash);
 }
 
+// ── Travel-time fields, keyed by person ID (never by position) ─
 const fieldCache = new Map<string, TimeField>();
 // Street modes upgrade from model estimates to real OSRM-routed fields, async.
 const fieldUpgrades = new Map<string, 'pending' | 'done'>();
 
-function getField(who: 'A' | 'B', mode: Mode): TimeField {
+function getField(p: Person): TimeField {
   // Transit (headway waits) and car (traffic) depend on the daypart.
-  const key = mode === 'transit' || mode === 'car' ? `${who}:${mode}:${state.daypart}` : `${who}:${mode}`;
+  const key = p.mode === 'transit' || p.mode === 'car' ? `${p.id}:${p.mode}:${state.daypart}` : `${p.id}:${p.mode}`;
   let f = fieldCache.get(key);
   if (!f) {
-    f = timeField(getGraph(state.daypart), state[who].pt, mode, GRID);
-    if (mode === 'car') for (let i = 0; i < f.length; i++) f[i] = carDaypartMin(f[i], state.daypart);
+    f = timeField(getGraph(state.daypart), p.pt, p.mode, GRID);
+    if (p.mode === 'car') for (let i = 0; i < f.length; i++) f[i] = carDaypartMin(f[i], state.daypart);
     fieldCache.set(key, f);
   }
-  if (mode !== 'transit' && !fieldUpgrades.has(key)) upgradeField(who, mode, key);
+  if (p.mode !== 'transit' && !fieldUpgrades.has(key)) upgradeField(p.id, p.mode, key);
   return f;
 }
 
-function upgradeField(who: 'A' | 'B', mode: Mode, key: string): void {
+function upgradeField(id: number, mode: Mode, key: string): void {
   fieldUpgrades.set(key, 'pending');
-  const pt = state[who].pt;
+  const person = personById(id);
+  if (!person) return;
+  const pt = person.pt;
   const daypart = state.daypart;
-  void routedField(pt, mode, GRID).then((f) => {
-    if (state[who].pt !== pt) return; // pin moved while routing — stale
-    if (!f) {
-      fieldUpgrades.delete(key); // local server unreachable; retry on next recompute
-      return;
-    }
-    if (mode === 'car') for (let i = 0; i < f.length; i++) f[i] = carDaypartMin(f[i], daypart);
-    fieldCache.set(key, f);
-    fieldUpgrades.set(key, 'done');
-    scheduleRecompute();
-  });
+  void routedField(pt, mode, GRID)
+    .then((f) => {
+      const p = personById(id); // re-resolve: the person may be gone or moved
+      if (!p || p.pt !== pt) {
+        fieldUpgrades.delete(key);
+        return;
+      }
+      if (!f) {
+        fieldUpgrades.delete(key); // local server unreachable; retry on next recompute
+        return;
+      }
+      if (mode === 'car') for (let i = 0; i < f.length; i++) f[i] = carDaypartMin(f[i], daypart);
+      fieldCache.set(key, f);
+      fieldUpgrades.set(key, 'done');
+      scheduleRecompute();
+    })
+    .catch(() => fieldUpgrades.delete(key));
 }
 
-function clearPersonFields(who: 'A' | 'B'): void {
-  for (const key of [...fieldCache.keys()]) if (key.startsWith(`${who}:`)) fieldCache.delete(key);
-  for (const key of [...fieldUpgrades.keys()]) if (key.startsWith(`${who}:`)) fieldUpgrades.delete(key);
-}
-
-function activeCombos(): { a: Mode; b: Mode }[] {
-  if (state.solo) return [...state.A.modes].map((mode) => ({ a: mode, b: mode }));
-  const out: { a: Mode; b: Mode }[] = [];
-  for (const m of MODES) {
-    if (!state.A.modes.has(m.id)) continue;
-    for (const n of MODES) {
-      if (!state.B.modes.has(n.id)) continue;
-      out.push({ a: m.id, b: n.id });
-    }
-  }
-  return out;
+function clearPersonFields(id: number): void {
+  for (const key of [...fieldCache.keys()]) if (key.startsWith(`${id}:`)) fieldCache.delete(key);
+  for (const key of [...fieldUpgrades.keys()]) if (key.startsWith(`${id}:`)) fieldUpgrades.delete(key);
 }
 
 // ── Map ──────────────────────────────────────────────────────
@@ -188,95 +234,240 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
 
 const venueLayer = L.layerGroup().addTo(map);
 
-const personLabel = (who: 'A' | 'B'): string => (who === 'A' ? state.nameA : state.nameB) || who;
-const personInitial = (who: 'A' | 'B'): string => personLabel(who).charAt(0).toUpperCase();
-
-function bulletIcon(who: 'A' | 'B'): L.DivIcon {
+function bulletIcon(slotIdx: number, initial: string): L.DivIcon {
   return L.divIcon({
     className: '',
-    html: `<div class="marker-bullet ${who.toLowerCase()}">${personInitial(who)}</div>`,
+    html: `<div class="marker-bullet" style="background:${PERSON_COLORS[slotIdx]}">${initial}</div>`,
     iconSize: [30, 30],
     iconAnchor: [15, 15],
   });
 }
 
-function makePersonMarker(who: 'A' | 'B'): L.Marker {
-  const marker = L.marker(state[who].pt, { icon: bulletIcon(who), draggable: true }).addTo(map);
-  marker.on('dragend', () => {
-    const ll = marker.getLatLng();
-    state[who].pt = { lat: ll.lat, lng: ll.lng };
-    if (state.solo && who === 'A') {
-      state.B.pt = state.A.pt;
-      exactCache.B.clear();
+// Markers keyed by person id; created/positioned/pruned by syncMarkers().
+const markers = new Map<number, L.Marker>();
+
+function syncMarkers(): void {
+  const liveIds = new Set(state.people.map((p) => p.id));
+  for (const [id, m] of [...markers]) {
+    if (!liveIds.has(id)) {
+      map.removeLayer(m);
+      markers.delete(id);
     }
-    clearPersonFields(who);
-    exactCache[who].clear();
-    (document.getElementById(`addr-${who.toLowerCase()}`) as HTMLInputElement).value = '';
-    coverageWarning(who);
-    scheduleRecompute();
+  }
+  state.people.forEach((p, i) => {
+    let m = markers.get(p.id);
+    if (!m) {
+      m = L.marker(p.pt, { icon: bulletIcon(i, personInitial(i)), draggable: true }).addTo(map);
+      m.on('dragend', () => {
+        const person = personById(p.id); // stable id — survives any reordering
+        if (!person) return;
+        const ll = m!.getLatLng();
+        person.pt = { lat: ll.lat, lng: ll.lng };
+        person.label = ''; // a dragged pin no longer matches a typed address
+        clearPersonFields(person.id);
+        exactCache.get(person.id)?.clear();
+        renderPeople();
+        coverageWarning(person);
+        scheduleRecompute();
+      });
+      markers.set(p.id, m);
+    } else {
+      m.setLatLng(p.pt);
+      m.setIcon(bulletIcon(i, personInitial(i)));
+    }
   });
-  return marker;
 }
 
-const markers = { A: makePersonMarker('A'), B: makePersonMarker('B') };
+// ── People rows: one declarative render of the whole roster ──
+// Rebuilt after every roster/identity change (never while typing). The last
+// row is a GHOST slot — the next person's address box, always visible; typing
+// an address there creates the person. No hidden controls, no mirror person.
+let ghostMode: Mode = 'transit';
 
-// ── Swap A ↔ B ───────────────────────────────────────────────
-function swapPersons(): void {
-  const tmp = state.A;
-  state.A = state.B;
-  state.B = tmp;
+function renderPeople(): void {
+  const box = document.getElementById('people')!;
+  box.innerHTML = '';
 
-  // Rename cached fields instead of recomputing them.
-  const rename = (k: string) => (k.startsWith('A:') ? 'B' + k.slice(1) : k.startsWith('B:') ? 'A' + k.slice(1) : k);
-  const fields = [...fieldCache].map(([k, v]) => [rename(k), v] as const);
-  fieldCache.clear();
-  for (const [k, v] of fields) fieldCache.set(k, v);
-  const upgrades = [...fieldUpgrades].map(([k, v]) => [rename(k), v] as const);
-  fieldUpgrades.clear();
-  for (const [k, v] of upgrades) fieldUpgrades.set(k, v);
-  const tmpExact = exactCache.A;
-  exactCache.A = exactCache.B;
-  exactCache.B = tmpExact;
+  state.people.forEach((p, i) => {
+    const sec = document.createElement('section');
+    sec.className = 'person';
+    sec.dataset.person = SLOT[i];
+    sec.innerHTML =
+      `<div class="person-head">` +
+      `<span class="bullet" id="bullet-${SLOT[i]}" style="background:${PERSON_COLORS[i]}">${personInitial(i)}</span>` +
+      `<input id="name-${SLOT[i]}" class="pname" type="text" maxlength="14" placeholder="Name" autocomplete="off" />` +
+      `<input id="addr-${SLOT[i]}" type="text" autocomplete="off" />` +
+      (i > 0 ? `<button class="person-remove" title="remove ${personLabel(i)}">✕</button>` : '') +
+      `</div>` +
+      `<div class="modes" id="modes-${SLOT[i]}"></div>`;
+    box.appendChild(sec);
 
-  markers.A.setLatLng(state.A.pt);
-  markers.B.setLatLng(state.B.pt);
-  const inA = document.getElementById('addr-a') as HTMLInputElement;
-  const inB = document.getElementById('addr-b') as HTMLInputElement;
-  [inA.value, inB.value] = [inB.value, inA.value];
-  [state.nameA, state.nameB] = [state.nameB, state.nameA];
-  state.bias = -state.bias;
-  (document.getElementById('bias') as HTMLInputElement).value = String(state.bias);
-  const nA = document.getElementById('name-a') as HTMLInputElement;
-  const nB = document.getElementById('name-b') as HTMLInputElement;
-  [nA.value, nB.value] = [nB.value, nA.value];
+    const addr = sec.querySelector<HTMLInputElement>(`#addr-${SLOT[i]}`)!;
+    addr.value = p.label;
+    addr.placeholder = i === 0 ? '📍 Your location or an address…' : `Person ${SLOT[i].toUpperCase()} address…`;
+    wireAddrInput(addr, p.id);
+    wireNameInput(sec, p.id, i);
+    renderModePills(sec.querySelector(`#modes-${SLOT[i]}`)!, p.mode, (m) => {
+      const person = personById(p.id);
+      if (!person || person.mode === m) return;
+      person.mode = m;
+      closeDetail(); // an open card would show times for the OLD mode
+      renderPeople();
+      scheduleRecompute();
+    });
+
+    if (i > 0) {
+      sec.querySelector<HTMLButtonElement>('.person-remove')!.onclick = () => removePerson(p.id);
+    }
+    if (isDuo() && i === 0) {
+      const swap = document.createElement('button');
+      swap.id = 'swap-ab';
+      swap.title = 'Swap Person A ↔ Person B';
+      swap.textContent = '⇅';
+      swap.onclick = swapPersons;
+      sec.appendChild(swap);
+    }
+  });
+
+  // Ghost slot: the standing invitation for the next person.
+  if (nPeople() < MAX_PEOPLE) {
+    const i = nPeople();
+    const sec = document.createElement('section');
+    sec.className = 'person ghost';
+    sec.dataset.person = SLOT[i];
+    sec.innerHTML =
+      `<div class="person-head">` +
+      `<span class="bullet ghost-bullet" style="color:${PERSON_COLORS[i]};border-color:${PERSON_COLORS[i]}">${SLOT[i].toUpperCase()}</span>` +
+      `<input id="addr-ghost" type="text" autocomplete="off" />` +
+      `</div>` +
+      `<div class="modes" id="modes-ghost"></div>`;
+    box.appendChild(sec);
+    const addr = sec.querySelector<HTMLInputElement>('#addr-ghost')!;
+    addr.placeholder = isSolo() ? 'Add a friend to meet in the middle…' : `＋ Add person ${SLOT[i].toUpperCase()} — address…`;
+    wireAddrInput(addr, 'ghost');
+    renderModePills(sec.querySelector('#modes-ghost')!, ghostMode, (m) => {
+      ghostMode = m;
+      renderPeople();
+    });
+  }
+
+  syncMarkers();
   applyNames();
-  renderModes('A');
-  renderModes('B');
-  closeDetail();
-  scheduleRecompute();
+  syncModeUi();
 }
 
-// ── UI: mode pills ───────────────────────────────────────────
-function renderModes(who: 'A' | 'B'): void {
-  const el = document.getElementById(`modes-${who.toLowerCase()}`)!;
+function renderModePills(el: Element, current: Mode, pick: (m: Mode) => void): void {
   el.innerHTML = '';
   for (const m of MODES) {
     const btn = document.createElement('button');
-    btn.className = 'mode-pill' + (state[who].modes.has(m.id) ? ' on' : '');
+    btn.className = 'mode-pill' + (current === m.id ? ' on' : '');
     btn.textContent = m.label;
-    btn.onclick = () => {
-      if (state[who].modes.has(m.id)) return;
-      state[who].modes = new Set([m.id]);
-      if (state.solo && who === 'A') state.B.modes = new Set([m.id]);
-      renderModes(who);
-      closeDetail(); // an open card would show combos for the OLD mode
-      scheduleRecompute();
-    };
+    btn.onclick = () => pick(m.id);
     el.appendChild(btn);
   }
 }
 
-// ── Venue sort criteria ──────────────────────────────────────
+function wireNameInput(sec: HTMLElement, personId: number, i: number): void {
+  const input = sec.querySelector<HTMLInputElement>(`#name-${SLOT[i]}`)!;
+  const bullet = sec.querySelector<HTMLElement>(`#bullet-${SLOT[i]}`)!;
+  const person = personById(personId)!;
+  input.value = person.name;
+  // Click the bullet to name the person; Enter/blur commits and restores it.
+  bullet.addEventListener('click', () => {
+    input.classList.add('editing');
+    input.focus();
+    input.select();
+  });
+  input.addEventListener('blur', () => input.classList.remove('editing'));
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === 'Escape') input.blur();
+  });
+  input.addEventListener('input', () => {
+    const p = personById(personId);
+    if (!p) return;
+    p.name = input.value.trim().slice(0, 16);
+    applyNames(); // names only — never rebuilds the row under the caret
+    syncUrl();
+  });
+}
+
+// Names touch bullets, markers, dial labels, sort chips — but never inputs.
+function applyNames(): void {
+  state.people.forEach((p, i) => {
+    const b = document.getElementById(`bullet-${SLOT[i]}`);
+    if (b) {
+      b.textContent = personInitial(i);
+      b.title = p.name ? `${p.name} — click to rename` : 'Click to add a name';
+    }
+    markers.get(p.id)?.setIcon(bulletIcon(i, personInitial(i)));
+  });
+  const advA = document.querySelector('.adv-labels .adv-a');
+  const advB = document.querySelector('.adv-labels .adv-b');
+  if (advA) advA.textContent = `${personLabel(0)} sooner`;
+  if (advB) advB.textContent = `${personLabel(1)} sooner`;
+  updateBiasLabel();
+  renderSortChips();
+  updatePlanBar();
+}
+
+// ── Roster changes ───────────────────────────────────────────
+function addPerson(hit: GeoHit): void {
+  if (nPeople() >= MAX_PEOPLE) return;
+  const p = newPerson(hit.pt, ghostMode);
+  p.label = hit.label;
+  state.people.push(p);
+  ghostMode = 'transit';
+  closeDetail();
+  renderPeople();
+  map.panTo(hit.pt);
+  coverageWarning(p);
+  scheduleRecompute();
+}
+
+function removePerson(id: number): void {
+  const i = state.people.findIndex((p) => p.id === id);
+  if (i <= 0) return; // person 0 is you — the anchor
+  state.people.splice(i, 1);
+  clearPersonFields(id);
+  exactCache.delete(id);
+  closeDetail();
+  renderPeople();
+  scheduleRecompute();
+}
+
+function swapPersons(): void {
+  if (!isDuo()) return;
+  [state.people[0], state.people[1]] = [state.people[1], state.people[0]];
+  state.bias = -state.bias; // the dial is directional; the direction flipped
+  closeDetail();
+  renderPeople(); // caches/markers are id-keyed — they follow their person
+  configureSlider();
+  syncUrl();
+  scheduleRecompute();
+}
+
+// Near-me: collapse the plan to just you at a location.
+function enterNearMe(pt: Pt, label: string, forceWalk: boolean): void {
+  for (const p of state.people.slice(1)) {
+    clearPersonFields(p.id);
+    exactCache.delete(p.id);
+  }
+  state.people.length = 1;
+  const p0 = state.people[0];
+  p0.pt = pt;
+  p0.label = label;
+  if (forceWalk) p0.mode = 'walk';
+  clearPersonFields(p0.id);
+  exactCache.get(p0.id)?.clear();
+  closeDetail();
+  renderPeople();
+  map.setView(pt, 15);
+  if (IS_MOBILE) sheetTo('peek'); // nearby-first: the map and its glow lead
+  coverageWarning(p0);
+  scheduleRecompute();
+}
+
+// ── Venue sort criteria (duo) ────────────────────────────────
 type SortBy = 'best' | 'total' | 'equal' | 'a' | 'b';
 
 const SORTS: { id: SortBy; label: string }[] = [
@@ -288,30 +479,9 @@ const SORTS: { id: SortBy; label: string }[] = [
 ];
 
 function sortLabel(s: { id: SortBy; label: string }): string {
-  if (s.id === 'a') return `BEST FOR ${personLabel('A').toUpperCase()}`;
-  if (s.id === 'b') return `BEST FOR ${personLabel('B').toUpperCase()}`;
+  if (s.id === 'a') return `BEST FOR ${personLabel(0).toUpperCase()}`;
+  if (s.id === 'b') return `BEST FOR ${personLabel(1).toUpperCase()}`;
   return s.label;
-}
-
-type Combo = { modeA: Mode; modeB: Mode; tA: number; tB: number };
-
-/** The combo that wins under the current criterion — also the headline shown. */
-function pickCombo(combos: Combo[], sortBy: SortBy): Combo {
-  const metric = (c: Combo): number => {
-    switch (sortBy) {
-      case 'total':
-        return c.tA + c.tB;
-      case 'equal':
-        return Math.abs(c.tA - c.tB);
-      case 'a':
-        return c.tA;
-      case 'b':
-        return c.tB;
-      default:
-        return -fairnessScore(c.tA, c.tB, state.bias); // lower = better
-    }
-  };
-  return combos.reduce((p, c) => (metric(c) < metric(p) ? c : p));
 }
 
 function renderSortChips(): void {
@@ -331,7 +501,7 @@ function renderSortChips(): void {
   }
 }
 
-// ── UI: daypart + bias dial ──────────────────────────────────
+// ── UI: daypart + the one slider (dial in duo, λ in group) ───
 const DAYPARTS: { id: Daypart; label: string }[] = [
   { id: 'rush', label: 'RUSH HOUR' },
   { id: 'midday', label: 'MIDDAY' },
@@ -350,8 +520,8 @@ function renderDayparts(): void {
       if (state.daypart === d.id) return;
       state.daypart = d.id;
       // Refined car times are daypart-scaled — force a re-fetch at the new hour.
-      for (const who of ['A', 'B'] as const) {
-        for (const k of [...exactCache[who].keys()]) if (k.startsWith('car:')) exactCache[who].delete(k);
+      for (const m of exactCache.values()) {
+        for (const k of [...m.keys()]) if (k.startsWith('car:')) m.delete(k);
       }
       renderDayparts();
       closeDetail();
@@ -363,23 +533,54 @@ function renderDayparts(): void {
 
 function updateBiasLabel(): void {
   const val = document.getElementById('bias-val')!;
+  if (isGroup()) {
+    val.textContent = state.lambda <= 0.15 ? 'FAIR TO ALL' : state.lambda >= 0.85 ? 'LEAST TOTAL' : 'BALANCED';
+    document.getElementById('bias-left')!.textContent = '← fair to all';
+    document.getElementById('bias-right')!.textContent = 'least total →';
+    return;
+  }
   val.textContent =
     state.bias === 0
       ? 'FAIR'
       : state.bias < 0
-        ? `${personLabel('A')} saves ${-state.bias}′`
-        : `${personLabel('B')} saves ${state.bias}′`;
-  document.getElementById('bias-left')!.textContent = `← ${personLabel('A')} advantage`;
-  document.getElementById('bias-right')!.textContent = `${personLabel('B')} advantage →`;
+        ? `${personLabel(0)} saves ${-state.bias}′`
+        : `${personLabel(1)} saves ${state.bias}′`;
+  document.getElementById('bias-left')!.textContent = `← ${personLabel(0)} advantage`;
+  document.getElementById('bias-right')!.textContent = `${personLabel(1)} advantage →`;
+}
+
+function configureSlider(): void {
+  const slider = document.getElementById('bias') as HTMLInputElement;
+  if (isGroup()) {
+    slider.min = '0';
+    slider.max = '100';
+    slider.step = '5';
+    slider.value = String(Math.round(state.lambda * 100));
+  } else {
+    slider.min = '-20';
+    slider.max = '20';
+    slider.step = '5';
+    slider.value = String(state.bias);
+  }
+  updateBiasLabel();
 }
 
 function wireBias(): void {
   const slider = document.getElementById('bias') as HTMLInputElement;
   slider.addEventListener('input', () => {
-    state.bias = +slider.value;
+    if (isGroup()) state.lambda = +slider.value / 100;
+    else state.bias = +slider.value;
     updateBiasLabel();
     scheduleRecompute();
   });
+}
+
+// Mode-dependent chrome, all in one place, driven purely by headcount.
+function syncModeUi(): void {
+  (document.querySelector('#tuning-panel .bias') as HTMLElement).hidden = isSolo();
+  (document.getElementById('layers-panel') as HTMLElement).hidden = !isDuo(); // advantage key: duo only
+  (document.getElementById('sort-chips') as HTMLElement).hidden = !isDuo(); // A/B sorts: duo only
+  configureSlider();
 }
 
 // ── UI: filters ──────────────────────────────────────────────
@@ -430,42 +631,38 @@ function renderDietFilters(): void {
 }
 
 // ── UI: geocode inputs with autocomplete ─────────────────────
-function coverageWarning(who: 'A' | 'B'): void {
-  const p = state[who].pt;
-  const outside = p.lat < GRID.latMin || p.lat > GRID.latMax || p.lng < GRID.lngMin || p.lng > GRID.lngMax;
+function coverageWarning(p: Person): void {
+  const outside =
+    p.pt.lat < GRID.latMin || p.pt.lat > GRID.latMax || p.pt.lng < GRID.lngMin || p.pt.lng > GRID.lngMax;
   if (outside) {
-    setStatus(`Heads up: ${who} is outside NYC coverage — no subway data there, times are rough estimates`, 5000);
+    const i = state.people.indexOf(p);
+    setStatus(`Heads up: ${personLabel(Math.max(i, 0))} is outside NYC coverage — no subway data there, times are rough estimates`, 5000);
   }
 }
 
-function warnIfOutsideCoverage(who: 'A' | 'B', pt: Pt): void {
-  const inside =
-    pt.lat >= GRID.latMin && pt.lat <= GRID.latMax && pt.lng >= GRID.lngMin && pt.lng <= GRID.lngMax;
-  if (!inside) {
-    setStatus(`Heads up: ${who} is outside NYC coverage — subway can't reach there, times are rough estimates`, 5000);
-  }
-}
-
-function applyLocation(who: 'A' | 'B', hit: GeoHit, input: HTMLInputElement): void {
+// The ONE commit path for an address — keyboard and mouse both land here,
+// carrying the person's stable id (or 'ghost' = create the next person).
+function commitLocation(target: number | 'ghost', hit: GeoHit, input: HTMLInputElement): void {
   input.value = hit.label;
   input.classList.remove('bad');
-  if (state.solo && who === 'B') exitSolo();
-  state[who].pt = hit.pt;
-  if (state.solo && who === 'A') {
-    state.B.pt = hit.pt;
-    exactCache.B.clear();
+  if (target === 'ghost') {
+    addPerson(hit);
+    return;
   }
-  warnIfOutsideCoverage(who, hit.pt);
-  clearPersonFields(who);
-  exactCache[who].clear();
-  markers[who].setLatLng(hit.pt);
+  const p = personById(target);
+  if (!p) return;
+  p.pt = hit.pt;
+  p.label = hit.label;
+  clearPersonFields(p.id);
+  exactCache.get(p.id)?.clear();
+  markers.get(p.id)?.setLatLng(hit.pt);
   map.panTo(hit.pt);
-  coverageWarning(who);
+  coverageWarning(p);
   scheduleRecompute();
+  syncUrl();
 }
 
-function wireInput(who: 'A' | 'B'): void {
-  const input = document.getElementById(`addr-${who.toLowerCase()}`) as HTMLInputElement;
+function wireAddrInput(input: HTMLInputElement, target: number | 'ghost'): void {
   const drop = document.createElement('div');
   drop.className = 'suggest';
   drop.hidden = true;
@@ -482,14 +679,14 @@ function wireInput(who: 'A' | 'B'): void {
   const renderDrop = () => {
     drop.innerHTML = '';
     drop.hidden = hits.length === 0;
-    hits.forEach((h, i) => {
+    hits.forEach((h, rowIdx) => {
       const row = document.createElement('div');
-      row.className = 'suggest-row' + (i === sel ? ' sel' : '');
+      row.className = 'suggest-row' + (rowIdx === sel ? ' sel' : '');
       row.textContent = h.label;
       row.onmousedown = (e) => {
         e.preventDefault(); // beat the blur
         close();
-        applyLocation(who, h, input);
+        commitLocation(target, h, input); // target = person id, NEVER a row index
       };
       drop.appendChild(row);
     });
@@ -524,7 +721,7 @@ function wireInput(who: 'A' | 'B'): void {
       const picked = sel >= 0 ? hits[sel] : hits[0];
       close();
       if (picked) {
-        applyLocation(who, picked, input);
+        commitLocation(target, picked, input);
         return;
       }
       // No suggestions — precise Nominatim fallback.
@@ -535,7 +732,7 @@ function wireInput(who: 'A' | 'B'): void {
         input.classList.add('bad');
         return;
       }
-      applyLocation(who, hit, input);
+      commitLocation(target, hit, input);
     }
   });
 }
@@ -559,7 +756,7 @@ function scheduleRecompute(venuesOnly = false): void {
   pendingVenuesOnly = pendingVenuesOnly && venuesOnly; // a full request never downgrades
   updatePlanBar();
   window.clearTimeout(pending);
-  setStatus(state.solo ? 'Finding spots near you…' : 'Computing fair zones…');
+  setStatus(isSolo() ? 'Finding spots near you…' : 'Computing fair zones…');
   pending = window.setTimeout(() => {
     const vo = pendingVenuesOnly;
     pendingVenuesOnly = true;
@@ -567,60 +764,77 @@ function scheduleRecompute(venuesOnly = false): void {
   }, 30);
 }
 
+// Exactly one of these is live, matching the current headcount.
+let lastSolo: TimeField | null = null;
 let lastLayers: ComboLayer[] = [];
+let lastGroup: GroupLayer | null = null;
+
+function coreReady(): boolean {
+  if (isSolo()) return lastSolo !== null;
+  if (isDuo()) return lastLayers.length > 0;
+  return lastGroup !== null;
+}
 
 function recompute(venuesOnly: boolean): void {
-  if (!venuesOnly || lastLayers.length === 0) {
-    const combos = activeCombos();
-    lastLayers = combos.map((c) => {
-      const fA = getField('A', c.a);
-      const fB = state.solo ? fA : getField('B', c.b);
-      return comboLayer(c.a, c.b, fA, fB, state.bias);
-    });
+  if (!venuesOnly || !coreReady()) {
+    lastSolo = null;
+    lastLayers = [];
+    lastGroup = null;
+    if (isSolo()) {
+      lastSolo = getField(state.people[0]);
+    } else if (isDuo()) {
+      const [p0, p1] = state.people;
+      lastLayers = [comboLayer(p0.mode, p1.mode, getField(p0), getField(p1), state.bias)];
+    } else {
+      lastGroup = groupLayer(state.people.map((p) => getField(p)), state.lambda);
+    }
   }
   renderVenues(); // heat follows the venue list (drawn at the end of renderVenues)
   setStatus('Ready', 900);
 }
 
-// ── Advantage heatmap over the recommended zone ──────────────
-// Bold, opaque heat concentrated where meeting is quickest for BOTH people:
-// leafy green = closer for A, star yellow = even, cow purple = closer for B.
-// Clipped to land by the baked mask; fades out past the recommended zone.
+// ── Heat over the recommended zone ───────────────────────────
+// Solo: closeness gradient. Duo: green/yellow/purple advantage. Group:
+// per-person colors blended by who reaches each spot fastest.
 const LANDMASK = (landmaskData as { mask: string }).mask;
 const HEAT_BOUNDS = L.latLngBounds([GRID.latMin, GRID.lngMin], [GRID.latMax, GRID.lngMax]);
 let heatOverlay: L.ImageOverlay | null = null;
 
 let shownVenueCells: number[] = []; // grid cells of the currently listed venues
 
-function drawContours(): void {
-  if (lastLayers.length === 0) return;
-  const gap = new Float32Array(CELLS);
-  const minA = maskField(minPersonField(lastLayers, 'A', CELLS), LANDMASK);
-  if (state.solo) {
-    // Advantage is meaningless solo (gap ≡ 0) — the glow becomes a closeness
-    // gradient instead: green ≤5′ from you, yellow ~15′, purple 25′+.
-    for (let i = 0; i < CELLS; i++) {
-      const t = minA[i];
-      gap[i] = isFinite(t) ? Math.max(-14, Math.min(14, ((t - 15) / 10) * 14)) : 14;
-    }
-  } else {
-    const minB = maskField(minPersonField(lastLayers, 'B', CELLS), LANDMASK);
-    for (let i = 0; i < CELLS; i++) {
-      gap[i] = minA[i] - minB[i];
-    }
-  }
-
-  const url = renderHeat(gap, shownVenueCells, GRID, state.solo ? 0 : state.bias).toDataURL();
+function setHeat(url: string, opacity: number): void {
   if (!heatOverlay) {
-    heatOverlay = L.imageOverlay(url, HEAT_BOUNDS, {
-      opacity: 0.78,
-      className: 'glow-img',
-      interactive: false,
-    }).addTo(map);
+    heatOverlay = L.imageOverlay(url, HEAT_BOUNDS, { opacity, className: 'glow-img', interactive: false }).addTo(map);
   } else {
     heatOverlay.setUrl(url);
   }
-  heatOverlay.setOpacity(state.solo ? 0.4 : 0.78); // whisper-light under a zoomed-in view
+  heatOverlay.setOpacity(opacity);
+}
+
+function drawContours(): void {
+  if (isSolo() && lastSolo) {
+    // Closeness gradient: green ≤5′ from you, yellow ~15′, purple 25′+.
+    const t0 = maskField(lastSolo.slice(), LANDMASK);
+    const gap = new Float32Array(CELLS);
+    for (let i = 0; i < CELLS; i++) {
+      const t = t0[i];
+      gap[i] = isFinite(t) ? Math.max(-14, Math.min(14, ((t - 15) / 10) * 14)) : 14;
+    }
+    setHeat(renderHeat(gap, shownVenueCells, GRID, 0).toDataURL(), 0.4);
+    return;
+  }
+  if (isDuo() && lastLayers.length) {
+    const minA = maskField(minPersonField(lastLayers, 'A', CELLS), LANDMASK);
+    const minB = maskField(minPersonField(lastLayers, 'B', CELLS), LANDMASK);
+    const gap = new Float32Array(CELLS);
+    for (let i = 0; i < CELLS; i++) gap[i] = minA[i] - minB[i];
+    setHeat(renderHeat(gap, shownVenueCells, GRID, state.bias).toDataURL(), 0.78);
+    return;
+  }
+  if (isGroup() && lastGroup) {
+    const maskedFields = lastGroup.times.map((f) => maskField(f.slice(), LANDMASK));
+    setHeat(renderGroupHeat(maskedFields, PERSON_RGB.slice(0, nPeople()), shownVenueCells, GRID).toDataURL(), 0.72);
+  }
 }
 
 // ── Venues ───────────────────────────────────────────────────
@@ -666,35 +880,36 @@ function metaLine(v: Venue): string {
   return bits.join(' · ');
 }
 
-// ── Route drawing (A & B paths to the selected venue) ────────
+// ── Route drawing ────────────────────────────────────────────
 const routeLayer = L.layerGroup().addTo(map);
 let routeToken = 0;
 
-async function personRoute(who: 'A' | 'B', mode: Mode, v: Venue): Promise<{ path: Pt[]; routed: boolean }> {
-  const origin = state[who].pt;
+async function personRoute(pt: Pt, mode: Mode, v: Venue): Promise<{ path: Pt[]; routed: boolean }> {
   const dest = { lat: v.lat, lng: v.lng };
-  if (mode === 'transit') return { path: transitPath(getGraph(state.daypart), origin, dest), routed: true };
-  const geo = await routedGeometry(origin, dest, mode);
+  if (mode === 'transit') return { path: transitPath(getGraph(state.daypart), pt, dest), routed: true };
+  const geo = await routedGeometry(pt, dest, mode);
   // No routing tier reachable → straight-line ESTIMATE, drawn visibly as one.
-  return geo ? { path: geo, routed: true } : { path: [origin, dest], routed: false };
+  return geo ? { path: geo, routed: true } : { path: [pt, dest], routed: false };
 }
 
-async function drawRoutes(v: Venue, modeA: Mode, modeB: Mode): Promise<void> {
+// Draw one colored leg per person. Snapshots pt/mode/color up-front so a
+// roster change mid-flight can never index into the wrong person.
+async function drawRoutes(v: Venue): Promise<void> {
   const token = ++routeToken;
-  const [ra, rb] = await Promise.all([personRoute('A', modeA, v), state.solo ? null : personRoute('B', modeB, v)]);
-  if (token !== routeToken) return; // another venue selected meanwhile
+  const legs = state.people.map((p, i) => ({ pt: p.pt, mode: p.mode, color: PERSON_COLORS[i] }));
+  const paths = await Promise.all(legs.map((leg) => personRoute(leg.pt, leg.mode, v)));
+  if (token !== routeToken) return; // roster changed / another venue selected
   routeLayer.clearLayers();
-  const style = (color: string, mode: Mode, routed: boolean) => ({
-    color,
-    weight: routed ? 4 : 3,
-    opacity: routed ? 0.85 : 0.45,
-    // transit = schematic station hops; unrouted street = rough estimate
-    dashArray: mode === 'transit' ? '2 8' : routed ? undefined : '10 10',
-    lineCap: 'round' as const,
+  paths.forEach((r, i) => {
+    L.polyline(r.path, {
+      color: legs[i].color,
+      weight: r.routed ? 4 : 3,
+      opacity: r.routed ? 0.85 : 0.45,
+      // transit = schematic station hops; unrouted street = rough estimate
+      dashArray: legs[i].mode === 'transit' ? '2 8' : r.routed ? undefined : '10 10',
+      lineCap: 'round' as const,
+    }).addTo(routeLayer);
   });
-  // Keep the user's viewport — auto-fitting to the route yanked the zoom out.
-  L.polyline(ra.path, style('#4f8f00', modeA, ra.routed)).addTo(routeLayer);
-  if (rb) L.polyline(rb.path, style('#7b2cbf', modeB, rb.routed)).addTo(routeLayer);
 }
 
 // ── Detail panel ─────────────────────────────────────────────
@@ -706,17 +921,7 @@ function closeDetail(): void {
   routeLayer.clearLayers();
 }
 
-function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB: number }[]): void {
-  const rows = combos
-    .map((c) =>
-      state.solo
-        ? `<tr><td><span class="ca">${esc(personLabel('A'))} · ${MODE_LABEL[c.modeA]}</span></td><td>${Math.round(c.tA)}′</td></tr>`
-        : `<tr><td><span class="ca">${esc(personLabel('A'))} · ${MODE_LABEL[c.modeA]}</span></td><td>${Math.round(c.tA)}′</td>` +
-          `<td><span class="cb">${esc(personLabel('B'))} · ${MODE_LABEL[c.modeB]}</span></td><td>${Math.round(c.tB)}′</td>` +
-          `<td class="gap">Δ${Math.round(Math.abs(c.tA - c.tB))}′</td></tr>`,
-    )
-    .join('');
-  // Cuisine/price only — the rating gets its own prominent row.
+function detailShell(v: Venue, rows: string, isFav: boolean): string {
   const metaBits: string[] = [];
   if (v.price) metaBits.push(`<span class="price">${'$'.repeat(v.price)}</span>`);
   if (v.cuisine) metaBits.push(esc(v.cuisine.split(';')[0].replace(/_/g, ' ')));
@@ -725,10 +930,9 @@ function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB
     v.rating != null
       ? `<div class="detail-rating"><span class="stars">${'★'.repeat(Math.round(v.rating))}${'☆'.repeat(5 - Math.round(v.rating))}</span> <b>${v.rating.toFixed(1)}</b>${v.ratings ? ` · ${v.ratings.toLocaleString()} reviews` : ''}</div>`
       : `<div class="detail-rating none"><span class="stars">☆☆☆☆☆</span> not yet rated</div>`;
-  const isFav = loadFavs(state.A.pt, state.B.pt).has(v.id);
-  detailEl.innerHTML =
+  return (
     `<button class="detail-close" aria-label="Close">✕</button>` +
-    `<button class="fav-btn detail-fav${isFav ? ' on' : ''}" title="favorite for this pair">♥</button>` +
+    `<button class="fav-btn detail-fav${isFav ? ' on' : ''}" title="favorite">♥</button>` +
     (v.img ? `<img class="detail-img" src="${esc(v.img)}" alt="" onerror="this.remove()" />` : '') +
     `<div class="detail-body">` +
     `<h3>${venueEmoji(v)} ${esc(v.name)}</h3>` +
@@ -741,14 +945,19 @@ function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB
     (v.hours ? `<div>🕐 ${esc(v.hours.length > 64 ? v.hours.slice(0, 64) + '…' : v.hours)}</div>` : '') +
     (v.tel ? `<div>📞 ${esc(v.tel)}</div>` : '') +
     `</div>` +
-    `<table class="detail-times">${rows}</table>` +
+    `<table class="detail-times${isGroup() ? ' group' : ''}">${rows}</table>` +
     `<div class="detail-links">` +
     (v.web ? `<a href="${esc(v.web)}" target="_blank" rel="noopener">Website ↗</a>` : '') +
     `<a href="${gmaps(v)}" target="_blank" rel="noopener">Google Maps ↗</a>` +
-    `</div></div>`;
+    `</div></div>`
+  );
+}
+
+function openDetail(v: Venue, rows: string): void {
+  const isFav = loadFavs(...favPts()).has(v.id);
+  detailEl.innerHTML = detailShell(v, rows, isFav);
   detailEl.hidden = false;
-  const headline = pickCombo(combos, state.sortBy);
-  void drawRoutes(v, headline.modeA, headline.modeB);
+  void drawRoutes(v);
   if (IS_MOBILE) {
     sheetTo('half');
     map.panInside([v.lat, v.lng], {
@@ -758,10 +967,45 @@ function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB
   }
   detailEl.querySelector<HTMLButtonElement>('.detail-close')!.onclick = closeDetail;
   detailEl.querySelector<HTMLButtonElement>('.detail-fav')!.onclick = () => {
-    toggleFav(state.A.pt, state.B.pt, v.id);
+    toggleFav(...favPts(), v.id);
     renderVenues();
-    showDetail(v, combos);
+    showDetail(v); // re-derive rows from CURRENT state — never a stale closure
   };
+}
+
+// One entry point: derives the per-person rows from current state.
+function showDetail(v: Venue): void {
+  const times = venueTimes(v);
+  if (isSolo()) {
+    const t = times.times[0];
+    openDetail(
+      v,
+      `<tr><td><span class="ca">${esc(personLabel(0))} · ${MODE_LABEL[state.people[0].mode]}</span></td><td>${isFinite(t) ? Math.round(t) + '′' : '—'}</td></tr>`,
+    );
+    return;
+  }
+  if (isDuo()) {
+    const [tA, tB] = times.times;
+    const [p0, p1] = state.people;
+    openDetail(
+      v,
+      `<tr><td><span class="ca">${esc(personLabel(0))} · ${MODE_LABEL[p0.mode]}</span></td><td>${Math.round(tA)}′</td>` +
+        `<td><span class="cb">${esc(personLabel(1))} · ${MODE_LABEL[p1.mode]}</span></td><td>${Math.round(tB)}′</td>` +
+        `<td class="gap">Δ${Math.round(Math.abs(tA - tB))}′</td></tr>`,
+    );
+    return;
+  }
+  const worst = Math.max(...times.times);
+  const total = times.times.reduce((a, b) => a + b, 0);
+  const rows = state.people
+    .map((p, i) => {
+      const t = times.times[i];
+      const far = isFinite(t) && t === worst;
+      return `<tr${far ? ' class="far"' : ''}><td><span class="cg" style="color:${PERSON_COLORS[i]}">${esc(personLabel(i))} · ${MODE_LABEL[p.mode]}</span></td><td>${isFinite(t) ? Math.round(t) + '′' : '—'}</td></tr>`;
+    })
+    .join('');
+  const summary = `<tr class="g-sum"><td>Longest ${Math.round(worst)}′</td><td>${Math.round(total)}′ total</td></tr>`;
+  openDetail(v, rows + summary);
 }
 
 // Venue dot fills: neutral → star yellow → heart red (pops over the heat).
@@ -774,58 +1018,65 @@ function heatColor(t: number): string {
 
 // ── Exact street routing (OSRM) ──────────────────────────────
 // Model times paint the heatmap; the ranked list gets refined with real
-// street-network routing per venue. Cache: `${mode}:${venueId}` → minutes.
-const exactCache = { A: new Map<string, number | null>(), B: new Map<string, number | null>() };
+// street-network routing per venue. Keyed by person ID: a removed person's
+// cache dies with them, a re-added person starts clean.
+const exactCache = new Map<number, Map<string, number | null>>();
 let refineToken = 0;
 
-function effectiveCombos(
-  v: Venue,
-  combos: { modeA: Mode; modeB: Mode; tA: number; tB: number }[],
-): { combos: { modeA: Mode; modeB: Mode; tA: number; tB: number }[]; refined: boolean } {
+function exactFor(p: Person, v: Venue): number | null | undefined {
+  return exactCache.get(p.id)?.get(`${p.mode}:${v.id}`);
+}
+
+/** Every person's minutes to this venue: street-routed where known, model otherwise. */
+function venueTimes(v: Venue): { times: number[]; refined: boolean } {
+  const cell = pointToCell(GRID, v);
   let refined = false;
-  const out = combos.map((c) => {
-    const eA = exactCache.A.get(`${c.modeA}:${v.id}`);
-    const eB = exactCache.B.get(`${c.modeB}:${v.id}`);
-    if (typeof eA === 'number' || typeof eB === 'number') refined = true;
-    return { ...c, tA: typeof eA === 'number' ? eA : c.tA, tB: typeof eB === 'number' ? eB : c.tB };
+  const times = state.people.map((p) => {
+    const ex = exactFor(p, v);
+    if (typeof ex === 'number') {
+      refined = true;
+      return ex;
+    }
+    const f = getField(p);
+    return cell >= 0 ? f[cell] : Infinity;
   });
-  return { combos: out, refined };
+  return { times, refined };
 }
 
 async function refineVenues(venues: Venue[]): Promise<void> {
   const token = ++refineToken;
   const jobs: Promise<void>[] = [];
-  const persons = state.solo ? (['A'] as const) : (['A', 'B'] as const);
-  for (const who of persons) {
-    for (const mode of state[who].modes) {
-      if (mode === 'transit') continue; // GTFS engine is the authority there
-      const missing = venues.filter((v) => !exactCache[who].has(`${mode}:${v.id}`));
-      if (!missing.length) continue;
-      const daypart = state.daypart;
-      jobs.push(
-        routedMinutes(state[who].pt, missing, mode).then((mins) => {
-          if (!mins) return;
-          missing.forEach((v, i) => {
-            const t = mins[i];
-            const val = mode === 'car' && t != null ? carDaypartMin(t, daypart) : t;
-            exactCache[who].set(`${mode}:${v.id}`, val);
-            if (state.solo) exactCache.B.set(`${mode}:${v.id}`, val); // B mirrors A
-          });
-        }),
-      );
+  // Snapshot id/mode/pt per person — the callback re-checks by id.
+  for (const snap of state.people.map((p) => ({ id: p.id, mode: p.mode, pt: p.pt }))) {
+    if (snap.mode === 'transit') continue; // GTFS engine is the authority there
+    let cache = exactCache.get(snap.id);
+    if (!cache) {
+      cache = new Map();
+      exactCache.set(snap.id, cache);
     }
+    const missing = venues.filter((v) => !cache!.has(`${snap.mode}:${v.id}`));
+    if (!missing.length) continue;
+    const daypart = state.daypart;
+    jobs.push(
+      routedMinutes(snap.pt, missing, snap.mode).then((mins) => {
+        if (!mins) return;
+        const c = exactCache.get(snap.id); // person may be gone — write nowhere
+        const live = personById(snap.id);
+        if (!c || !live || live.pt !== snap.pt) return;
+        missing.forEach((v, k) => {
+          const t = mins[k];
+          c.set(`${snap.mode}:${v.id}`, snap.mode === 'car' && t != null ? carDaypartMin(t, daypart) : t);
+        });
+      }),
+    );
   }
   if (!jobs.length) return;
   await Promise.all(jobs);
   if (token === refineToken) renderVenues(); // no missing left → no re-refine loop
 }
 
-function renderVenues(): void {
-  venueLayer.clearLayers();
-  const listEl = document.getElementById('venues')!;
-  const headEl = document.getElementById('venues-head')!;
-  listEl.innerHTML = '';
-
+// ── Venue list ───────────────────────────────────────────────
+function filteredVenues(): Venue[] {
   // Legend counts come from the pre-emoji filter pass so options stay visible.
   const preEmoji = filterVenues(VENUES, {
     categories: state.cats,
@@ -841,7 +1092,7 @@ function renderVenues(): void {
     emojiCounts.set(e, (emojiCounts.get(e) ?? 0) + 1);
   }
   renderEmojiLegend(emojiCounts);
-  const filtered = state.emojiFilter.size
+  return state.emojiFilter.size
     ? filterVenues(VENUES, {
         categories: state.cats,
         veganOnly: state.veganOnly,
@@ -852,47 +1103,100 @@ function renderVenues(): void {
         emoji: state.emojiFilter,
       })
     : preEmoji;
+}
 
-  // Shortlist by model score with margin, then rank by the SAME times the rows
-  // display (street-routed where available) so rank and readout never disagree.
-  const candidates = filtered
-    .map((v) => ({ v, s: scoreAtPoint(GRID, lastLayers, v) }))
-    .filter((x): x is { v: Venue; s: NonNullable<ReturnType<typeof scoreAtPoint>> } => x.s !== null && x.s.score > 0.001)
-    .sort((a, b) => b.s.score - a.s.score)
-    .slice(0, 60);
+interface Ranked {
+  v: Venue;
+  times: number[];
+  refined: boolean;
+  finalScore: number;
+  headline: string; // the times cell in the row
+}
 
-  const enriched = candidates.map(({ v, s }) => {
-    const eff = effectiveCombos(v, s.combos);
-    const finalScore = eff.combos.reduce((m, c) => Math.max(m, fairnessScore(c.tA, c.tB, state.bias)), 0);
-    const best = pickCombo(eff.combos, state.sortBy);
-    const shownTotal = best.tA + best.tB;
-    return { v, s, eff, finalScore, best, shownTotal };
-  });
+function rankVenues(filtered: Venue[]): Ranked[] {
+  if (isDuo()) {
+    // Shortlist by model score with margin, then rank by the SAME times the
+    // rows display (street-routed where available) so rank and readout agree.
+    const candidates = filtered
+      .map((v) => ({ v, s: scoreAtPoint(GRID, lastLayers, v) }))
+      .filter((x): x is { v: Venue; s: NonNullable<ReturnType<typeof scoreAtPoint>> } => x.s !== null && x.s.score > 0.001)
+      .sort((a, b) => b.s.score - a.s.score)
+      .slice(0, 60);
+    const enriched = candidates.map(({ v }) => {
+      const { times, refined } = venueTimes(v);
+      const [tA, tB] = times;
+      return { v, times, refined, tA, tB, finalScore: fairnessScore(tA, tB, state.bias) };
+    });
+    // Viability gate: a spot must SAVE BOTH PEOPLE TIME — anything more than
+    // 15 combined minutes past the best reachable venue is out.
+    const minTotal = enriched.reduce((m, x) => Math.min(m, x.tA + x.tB), Infinity);
+    return enriched
+      .filter((x) => x.tA + x.tB <= minTotal + 15)
+      .sort((x, y) => {
+        switch (state.sortBy) {
+          case 'total':
+            return x.tA + x.tB - (y.tA + y.tB);
+          case 'equal':
+            return Math.abs(x.tA - x.tB) - Math.abs(y.tA - y.tB) || x.tA + x.tB - (y.tA + y.tB);
+          case 'a':
+            return x.tA - y.tA || x.tB - y.tB;
+          case 'b':
+            return x.tB - y.tB || x.tA - y.tA;
+          default:
+            return y.finalScore - x.finalScore;
+        }
+      })
+      .slice(0, 40)
+      .map((x) => ({
+        v: x.v,
+        times: x.times,
+        refined: x.refined,
+        finalScore: x.finalScore,
+        headline: `<b class="ta">${Math.round(x.tA)}′</b>/<b class="tb">${Math.round(x.tB)}′</b>`,
+      }));
+  }
 
-  // Viability gate: a spot must SAVE BOTH PEOPLE TIME. Anything more than
-  // 15 combined minutes past the best reachable venue is out, no matter how
-  // perfectly equal the split is — equality ranks within the time-savers.
-  // Gated on the same combo the row displays, so what you see always passes.
-  const minVenueTotal = enriched.reduce((m, x) => Math.min(m, x.shownTotal), Infinity);
-  const scored = enriched
-    .filter((x) => x.shownTotal <= minVenueTotal + (state.solo ? 30 : 15))
-    .sort((x, y) => {
-      switch (state.sortBy) {
-        case 'total':
-          return x.best.tA + x.best.tB - (y.best.tA + y.best.tB);
-        case 'equal':
-          return Math.abs(x.best.tA - x.best.tB) - Math.abs(y.best.tA - y.best.tB) || x.best.tA + x.best.tB - (y.best.tA + y.best.tB);
-        case 'a':
-          return x.best.tA - y.best.tA || x.best.tB - y.best.tB;
-        case 'b':
-          return x.best.tB - y.best.tB || x.best.tA - y.best.tA;
-        default:
-          return y.finalScore - x.finalScore;
-      }
+  // Solo + group share the same shape: times per person → score → gate.
+  const enriched = filtered
+    .map((v) => {
+      const { times, refined } = venueTimes(v);
+      const worst = Math.max(...times);
+      const total = times.reduce((a, b) => a + b, 0);
+      const finalScore = isSolo() ? Math.exp(-times[0] / 20) : groupScore(times, state.lambda);
+      return { v, times, refined, worst, total, finalScore };
     })
-    .slice(0, 40);
+    .filter((x) => isFinite(x.worst) && x.finalScore > 0.001);
+  const minWorst = enriched.reduce((m, x) => Math.min(m, x.worst), Infinity);
+  const slack = isSolo() ? 15 : 12;
+  return enriched
+    .filter((x) => x.worst <= minWorst + slack)
+    .sort((x, y) => y.finalScore - x.finalScore)
+    .slice(0, 40)
+    .map((x) => ({
+      v: x.v,
+      times: x.times,
+      refined: x.refined,
+      finalScore: x.finalScore,
+      headline: isSolo()
+        ? `<b class="ta">${Math.round(x.times[0])}′</b>`
+        : `<b class="ta">${Math.round(x.worst)}′</b><span class="v-total"> longest · ${Math.round(x.total)}′ total</span>`,
+    }));
+}
 
-  headEl.textContent = state.solo ? `Near you · ${scored.length}` : `Best spots · ${scored.length}`;
+function renderVenues(): void {
+  venueLayer.clearLayers();
+  const listEl = document.getElementById('venues')!;
+  const headEl = document.getElementById('venues-head')!;
+  listEl.innerHTML = '';
+
+  const filtered = filteredVenues();
+  const scored = rankVenues(filtered);
+
+  headEl.textContent = isSolo()
+    ? `Near you · ${scored.length}`
+    : isDuo()
+      ? `Best spots · ${scored.length}`
+      : `Fair for all ${nPeople()} · ${scored.length}`;
 
   if (!scored.length) {
     const hint = state.emojiFilter.size
@@ -901,18 +1205,17 @@ function renderVenues(): void {
     listEl.innerHTML = `<li class="empty">No venues in the fair zone — ${hint}.</li>`;
     shownVenueCells = [];
     drawContours();
-    renderShortlist(loadFavs(state.A.pt, state.B.pt));
+    renderShortlist(loadFavs(...favPts()));
     syncUrl();
     return;
   }
 
-  // Favorites for this A↔B pair float to the top.
-  const favs = loadFavs(state.A.pt, state.B.pt);
+  // Favorites float to the top.
+  const favs = loadFavs(...favPts());
   const ordered = [...scored.filter((x) => favs.has(x.v.id)), ...scored.filter((x) => !favs.has(x.v.id))];
 
   const maxScore = Math.max(...scored.map((x) => x.finalScore)) || 1;
-  for (const { v, s, eff, finalScore, best } of ordered) {
-    const { refined } = eff;
+  for (const { v, refined, finalScore, headline } of ordered) {
     const isFav = favs.has(v.id);
     // Ring color: fully-vegan MTA green, vegan-friendly fainter; fav = pink.
     const ring = isFav ? '#ff2d78' : v.vegan === 2 ? '#00e05c' : v.vegan === 1 ? '#7dedaa' : '#fff';
@@ -925,38 +1228,35 @@ function renderVenues(): void {
       }),
     }).addTo(venueLayer);
     if (!IS_TOUCH && !IS_MOBILE) pin.bindTooltip(tipHtml(v), { direction: 'top', offset: [0, -12], className: 'venue-tip' });
-    pin.on('click', () => showDetail(v, effectiveCombos(v, s.combos).combos));
+    pin.on('click', () => showDetail(v));
 
     const li = document.createElement('li');
     if (isFav) li.className = 'faved';
     const meta = metaLine(v);
     li.innerHTML =
       `<span class="v-name">${venueEmoji(v)} ${esc(v.name)}</span>` +
-      `<span class="v-side"><button class="fav-btn${isFav ? ' on' : ''}" title="favorite for this pair">♥</button>` +
-      `<span class="v-times">${refined ? '<span class="routed" title="street-routed times">⚡</span>' : ''}${
-        state.solo ? `<b class="ta">${Math.round(best.tA)}′</b>` : `<b class="ta">${Math.round(best.tA)}′</b>/<b class="tb">${Math.round(best.tB)}′</b>`
-      }</span></span>` +
+      `<span class="v-side"><button class="fav-btn${isFav ? ' on' : ''}" title="favorite">♥</button>` +
+      `<span class="v-times">${refined ? '<span class="routed" title="street-routed times">⚡</span>' : ''}${headline}</span></span>` +
       (meta ? `<span class="v-meta">${meta}</span>` : '') +
       `<span class="v-tags">${venueTags(v)}</span>`;
     li.querySelector<HTMLButtonElement>('.fav-btn')!.onclick = (e) => {
       e.stopPropagation();
-      toggleFav(state.A.pt, state.B.pt, v.id);
+      toggleFav(...favPts(), v.id);
       renderVenues();
     };
     li.onclick = () => {
       map.setView([v.lat, v.lng], Math.max(map.getZoom(), 14));
-      showDetail(v, effectiveCombos(v, s.combos).combos);
+      showDetail(v);
     };
     listEl.appendChild(li);
   }
 
-  void refineVenues(candidates.map((x) => x.v));
+  void refineVenues(scored.map((x) => x.v));
   shownVenueCells = scored.map((x) => pointToCell(GRID, x.v));
   drawContours();
   renderShortlist(favs);
   syncUrl();
 }
-
 
 // ── Emoji legend (map side) — tap to filter by venue type ────
 function renderEmojiLegend(counts: Map<string, number>): void {
@@ -991,29 +1291,26 @@ function renderShortlist(favs: Set<string>): void {
   panel.querySelector('h3')!.innerHTML = `♥ Your shortlist (${items.length}) <span class="sl-caret">▾</span>`;
   list.innerHTML = '';
   for (const v of items) {
-    const s = scoreAtPoint(GRID, lastLayers, v);
-    const combos = s ? effectiveCombos(v, s.combos).combos : [];
-    const best = combos.length ? pickCombo(combos, state.sortBy) : null;
+    const { times } = venueTimes(v);
+    const worst = Math.max(...times);
     const li = document.createElement('li');
+    const timesHtml = isDuo()
+      ? `<span class="sl-times"><b class="ta">${Math.round(times[0])}′</b>/<b class="tb">${Math.round(times[1])}′</b></span>`
+      : `<span class="sl-times"><b class="ta">${isFinite(worst) ? Math.round(isSolo() ? times[0] : worst) + '′' : '—'}</b></span>`;
     li.innerHTML =
-      `<span class="sl-name">${venueEmoji(v)} ${esc(v.name)}</span>` +
-      (best
-        ? `<span class="sl-times">${state.solo ? `<b class="ta">${Math.round(best.tA)}′</b>` : `<b class="ta">${Math.round(best.tA)}′</b>/<b class="tb">${Math.round(best.tB)}′</b>`}</span>`
-        : '') +
-      `<button class="sl-remove" title="remove">✕</button>`;
+      `<span class="sl-name">${venueEmoji(v)} ${esc(v.name)}</span>` + timesHtml + `<button class="sl-remove" title="remove">✕</button>`;
     li.querySelector<HTMLButtonElement>('.sl-remove')!.onclick = (e) => {
       e.stopPropagation();
-      toggleFav(state.A.pt, state.B.pt, v.id);
+      toggleFav(...favPts(), v.id);
       renderVenues();
     };
     li.onclick = () => {
       map.setView([v.lat, v.lng], Math.max(map.getZoom(), 14));
-      if (s) showDetail(v, effectiveCombos(v, s.combos).combos);
+      showDetail(v);
     };
     list.appendChild(li);
   }
 }
-
 
 // ── Mobile layout: full-screen map + bottom sheet ───────────
 // Patterns per Material 3 / Apple HIG / Google-Maps-style sheets: translateY
@@ -1032,7 +1329,7 @@ function buildMobileLayout(): void {
   mtop.id = 'mtop';
   mtop.innerHTML =
     '<div class="mtop-row">' +
-    '<button id="plan-bar"><span class="pb-brand">\u{1F33F}</span><span id="plan-sum"></span><span class="pb-caret">\u25BE</span></button>' +
+    '<button id="plan-bar"><span class="pb-brand">\u{1F33F}</span><span id="plan-sum"></span><span class="pb-caret">▾</span></button>' +
     '</div>' +
     '<div id="mchips"></div>';
   document.body.appendChild(mtop);
@@ -1047,8 +1344,7 @@ function buildMobileLayout(): void {
   const editor = document.createElement('div');
   editor.id = 'plan-editor';
   editor.hidden = true;
-  editor.appendChild(document.querySelector('.person[data-person="A"]')!);
-  editor.appendChild(document.querySelector('.person[data-person="B"]')!);
+  editor.appendChild(document.getElementById('people')!);
   editor.appendChild(document.getElementById('tuning-panel')!);
   const done = document.createElement('button');
   done.id = 'plan-done';
@@ -1071,13 +1367,13 @@ function buildMobileLayout(): void {
   fab.onclick = locateMe;
   document.body.appendChild(fab);
 
-  // Solo-only invitation to go duo — opens the editor on Person B.
+  // Solo-only invitation to go duo — opens the editor on the ghost slot.
   const bInvite = document.createElement('button');
   bInvite.id = 'b-invite';
   bInvite.innerHTML = '\u{1F465} Meeting someone? <b>Add their spot</b>';
   bInvite.onclick = () => {
     planEditorOpen(true);
-    (document.getElementById('addr-b') as HTMLInputElement).focus();
+    (document.getElementById('addr-ghost') as HTMLInputElement | null)?.focus();
   };
   mtop.appendChild(bInvite);
 
@@ -1177,13 +1473,13 @@ function buildMobileLayout(): void {
 
   updatePlanBar = () => {
     const sum = document.getElementById('plan-sum')!;
-    const va = (document.getElementById('addr-a') as HTMLInputElement).value.trim();
-    const vb = (document.getElementById('addr-b') as HTMLInputElement).value.trim();
-    const mode = MODE_LABEL[[...state.A.modes][0]].toLowerCase();
-    sum.textContent = state.solo
-      ? `${va || 'Set your location'} \u00b7 ${mode}`
-      : `${personLabel('A')}: ${va || 'set address'} \u2194 ${personLabel('B')}: ${vb || 'set address'}`;
-    bInvite.hidden = !state.solo;
+    const [p0, p1] = state.people;
+    sum.textContent = isGroup()
+      ? `${nPeople()} people · fair zone`
+      : isSolo()
+        ? `${p0.label || 'Set your location'} · ${MODE_LABEL[p0.mode].toLowerCase()}`
+        : `${personLabel(0)}: ${p0.label || 'set address'} ↔ ${personLabel(1)}: ${p1.label || 'set address'}`;
+    bInvite.hidden = !isSolo();
   };
 
   window.addEventListener('resize', () => sheetTo(pos));
@@ -1191,53 +1487,7 @@ function buildMobileLayout(): void {
   updatePlanBar();
 }
 
-// ── Solo mode: "what's vegan near me" — A only, B joins later ─
-function soloUi(on: boolean): void {
-  (document.querySelector('#tuning-panel .bias') as HTMLElement).hidden = on;
-  (document.getElementById('layers-panel') as HTMLElement).hidden = on;
-  (document.getElementById('swap-ab') as HTMLElement).hidden = on;
-  (document.getElementById('modes-b') as HTMLElement).hidden = on;
-  (document.getElementById('sort-chips') as HTMLElement).hidden = on;
-  (document.getElementById('addr-b') as HTMLInputElement).placeholder = on
-    ? 'Add a friend to meet in the middle…'
-    : 'Person B address…';
-  (document.getElementById('addr-a') as HTMLInputElement).placeholder = on
-    ? '📍 Your location or an address…'
-    : 'Person A address…';
-}
-
-function enterSolo(pt: Pt, label: string, forceWalk: boolean): void {
-  state.solo = true;
-  state.A.pt = pt;
-  state.B.pt = pt;
-  if (forceWalk) {
-    state.A.modes = new Set(['walk']);
-    state.B.modes = new Set(['walk']);
-  }
-  (document.getElementById('addr-a') as HTMLInputElement).value = label;
-  (document.getElementById('addr-b') as HTMLInputElement).value = '';
-  clearPersonFields('A');
-  clearPersonFields('B');
-  exactCache.A.clear();
-  exactCache.B.clear();
-  markers.A.setLatLng(pt);
-  map.removeLayer(markers.B);
-  soloUi(true);
-  renderModes('A');
-  closeDetail();
-  map.setView(pt, 15);
-  if (IS_MOBILE) sheetTo('peek'); // nearby-first: the map and its glow lead
-  coverageWarning('A');
-  scheduleRecompute();
-}
-
-function exitSolo(): void {
-  state.solo = false;
-  markers.B.addTo(map);
-  soloUi(false);
-  renderModes('B');
-}
-
+// ── Near-me entry ────────────────────────────────────────────
 function locateMe(): void {
   if (!('geolocation' in navigator)) {
     setStatus('Your browser has no location access — type an address instead', 4000);
@@ -1246,11 +1496,11 @@ function locateMe(): void {
   setStatus('Finding you…');
   navigator.geolocation.getCurrentPosition(
     (pos) => {
-      enterSolo({ lat: pos.coords.latitude, lng: pos.coords.longitude }, 'My location 📍', true);
+      enterNearMe({ lat: pos.coords.latitude, lng: pos.coords.longitude }, 'My location 📍', true);
     },
     () => {
-      setStatus('Couldn\u2019t get your location — type an address instead', 4000);
-      (document.getElementById('addr-a') as HTMLInputElement).focus();
+      setStatus('Couldn’t get your location — type an address instead', 4000);
+      (document.getElementById('addr-a') as HTMLInputElement | null)?.focus();
     },
     { timeout: 8000, maximumAge: 60000 },
   );
@@ -1269,11 +1519,11 @@ document.getElementById('about-btn')!.onclick = () => {
 };
 document.getElementById('intro-x')!.onclick = hideIntro;
 document.getElementById('intro-go')!.onclick = () => {
-  // "Plan a meetup" → stay in solo but point them at Person B; typing an
-  // address there flips to the duo fair-zone view (applyLocation → exitSolo).
+  // "Plan a meetup" → point them at the ghost slot; committing an address
+  // there creates Person B and flips to the duo fair-zone view.
   hideIntro();
   planEditorOpen(true); // no-op on desktop; opens the sheet editor on mobile
-  (document.getElementById('addr-b') as HTMLInputElement).focus();
+  (document.getElementById('addr-ghost') as HTMLInputElement | null)?.focus();
 };
 document.getElementById('intro-near')!.onclick = () => {
   hideIntro();
@@ -1396,76 +1646,20 @@ function buildSubmitUi(): void {
 
 // ── Boot ─────────────────────────────────────────────────────
 buildSubmitUi();
-renderModes('A');
-renderModes('B');
 renderDayparts();
 wireBias();
 renderCatFilters();
 renderDietFilters();
 renderSortChips();
-wireInput('A');
-wireInput('B');
-
-// Restore shared-link UI state (labels, dial position).
-if (shared.labelA) (document.getElementById('addr-a') as HTMLInputElement).value = shared.labelA;
-if (shared.labelB) (document.getElementById('addr-b') as HTMLInputElement).value = shared.labelB;
-{
-  const slider = document.getElementById('bias') as HTMLInputElement;
-  slider.value = String(state.bias);
-  updateBiasLabel();
-}
+renderPeople(); // people rows + markers + mode chrome, all from state
 
 if (IS_MOBILE) buildMobileLayout();
-if (shared.solo && shared.a) {
-  enterSolo(shared.a, shared.labelA ?? 'Shared location 📍', false);
-} else if (!shared.a && !shared.b) {
-  // First view (desktop + mobile) = what's nearby: solo at the default pin so
-  // Person A is never an empty prompt. Recenter on the real location — the
-  // intro CTA is the first-visit gesture, returning visitors get the browser
-  // prompt / a prior grant.
-  enterSolo(state.A.pt, '', true);
-  if (localStorage.getItem('w2m:intro')) locateMe();
-}
 
-function applyNames(): void {
-  const ba = document.getElementById('bullet-a')!;
-  const bb = document.getElementById('bullet-b')!;
-  ba.textContent = personInitial('A');
-  bb.textContent = personInitial('B');
-  ba.title = state.nameA ? `${state.nameA} — click to rename` : 'Click to add a name';
-  bb.title = state.nameB ? `${state.nameB} — click to rename` : 'Click to add a name';
-  markers.A.setIcon(bulletIcon('A'));
-  markers.B.setIcon(bulletIcon('B'));
-  document.querySelector('.adv-labels .adv-a')!.textContent = `${personLabel('A')} sooner`;
-  document.querySelector('.adv-labels .adv-b')!.textContent = `${personLabel('B')} sooner`;
-  updateBiasLabel();
-  renderSortChips();
+if (!shared.a && !shared.b) {
+  // First view = what's nearby: near-me at the default pin. Returning
+  // visitors recenter via geolocation; first-timers get the intro CTA.
+  if (localStorage.getItem(INTRO_SEEN)) locateMe();
 }
-
-for (const who of ['A', 'B'] as const) {
-  const input = document.getElementById(`name-${who.toLowerCase()}`) as HTMLInputElement;
-  const bullet = document.getElementById(`bullet-${who.toLowerCase()}`)!;
-  input.value = who === 'A' ? state.nameA : state.nameB;
-  // Click the bullet to name the person; Enter/blur commits and restores it.
-  bullet.addEventListener('click', () => {
-    input.classList.add('editing');
-    input.focus();
-    input.select();
-  });
-  input.addEventListener('blur', () => input.classList.remove('editing'));
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === 'Escape') input.blur();
-  });
-  input.addEventListener('input', () => {
-    if (who === 'A') state.nameA = input.value.trim().slice(0, 16);
-    else state.nameB = input.value.trim().slice(0, 16);
-    applyNames();
-    syncUrl();
-  });
-}
-applyNames();
-
-document.getElementById('swap-ab')!.onclick = swapPersons;
 
 // Shortlist collapses to a badge on phones so it doesn't bury the map.
 {
