@@ -90,8 +90,8 @@ export function parseShare(hash: string): ShareState {
     const q = new URLSearchParams(raw);
     out.a = parsePt(q.get('a'));
     out.b = parsePt(q.get('b'));
-    out.labelA = q.get('la') ?? undefined;
-    out.labelB = q.get('lb') ?? undefined;
+    out.labelA = q.get('la')?.slice(0, 80) ?? undefined;
+    out.labelB = q.get('lb')?.slice(0, 80) ?? undefined;
     out.nameA = q.get('na')?.slice(0, 16).trim() || undefined;
     out.nameB = q.get('nb')?.slice(0, 16).trim() || undefined;
     out.modesA = parseModes(q.get('am'));

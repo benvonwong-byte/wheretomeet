@@ -150,7 +150,16 @@ const pickMode = (ms: Mode[] | undefined, fallback: Mode): Mode =>
 const favPts = (): [Pt, Pt] => [state.people[0].pt, (state.people[1] ?? state.people[0]).pt];
 if (shared.favs?.length) seedFavs(...favPts(), shared.favs);
 
+// Debounced: name typing calls this per keystroke and Safari rate-limits
+// history.replaceState (throws past ~100 calls/30s). The share button flushes.
+let urlTimer = 0;
 function syncUrl(): void {
+  window.clearTimeout(urlTimer);
+  urlTimer = window.setTimeout(syncUrlNow, 250);
+}
+
+function syncUrlNow(): void {
+  window.clearTimeout(urlTimer);
   const [p0, p1] = state.people;
   const hash = encodeShare({
     a: p0.pt,
@@ -199,7 +208,9 @@ function upgradeField(id: number, mode: Mode, key: string): void {
     .then((f) => {
       const p = personById(id); // re-resolve: the person may be gone or moved
       if (!p || p.pt !== pt) {
-        fieldUpgrades.delete(key);
+        // Only clear our own 'pending' — a newer upgrade may have finished
+        // ('done') and must not be forced into a redundant refetch.
+        if (fieldUpgrades.get(key) === 'pending') fieldUpgrades.delete(key);
         return;
       }
       if (!f) {
@@ -266,7 +277,12 @@ function syncMarkers(): void {
         person.label = ''; // a dragged pin no longer matches a typed address
         clearPersonFields(person.id);
         exactCache.get(person.id)?.clear();
-        renderPeople();
+        // Targeted clear of just this row's box — a full rebuild would wipe
+        // uncommitted text the user may be typing in another row.
+        const idx = state.people.indexOf(person);
+        const inp = document.getElementById(`addr-${SLOT[idx]}`) as HTMLInputElement | null;
+        if (inp) inp.value = '';
+        closeDetail(); // open card + routes were drawn from the old spot
         coverageWarning(person);
         scheduleRecompute();
       });
@@ -297,7 +313,7 @@ function renderPeople(): void {
       `<span class="bullet" id="bullet-${SLOT[i]}" style="background:${PERSON_COLORS[i]}">${personInitial(i)}</span>` +
       `<input id="name-${SLOT[i]}" class="pname" type="text" maxlength="14" placeholder="Name" autocomplete="off" />` +
       `<input id="addr-${SLOT[i]}" type="text" autocomplete="off" />` +
-      (i > 0 ? `<button class="person-remove" title="remove ${personLabel(i)}">✕</button>` : '') +
+      (i > 0 ? `<button class="person-remove" title="remove this person">✕</button>` : '') +
       `</div>` +
       `<div class="modes" id="modes-${SLOT[i]}"></div>`;
     box.appendChild(sec);
@@ -307,14 +323,18 @@ function renderPeople(): void {
     addr.placeholder = i === 0 ? '📍 Your location or an address…' : `Person ${SLOT[i].toUpperCase()} address…`;
     wireAddrInput(addr, p.id);
     wireNameInput(sec, p.id, i);
-    renderModePills(sec.querySelector(`#modes-${SLOT[i]}`)!, p.mode, (m) => {
+    const pillBox = sec.querySelector(`#modes-${SLOT[i]}`)!;
+    const pickPill = (m: Mode): void => {
       const person = personById(p.id);
       if (!person || person.mode === m) return;
       person.mode = m;
       closeDetail(); // an open card would show times for the OLD mode
-      renderPeople();
+      // Repaint ONLY these pills — a full row rebuild would wipe any
+      // uncommitted address text the user is typing elsewhere.
+      renderModePills(pillBox, m, pickPill);
       scheduleRecompute();
-    });
+    };
+    renderModePills(pillBox, p.mode, pickPill);
 
     if (i > 0) {
       sec.querySelector<HTMLButtonElement>('.person-remove')!.onclick = () => removePerson(p.id);
@@ -345,10 +365,12 @@ function renderPeople(): void {
     const addr = sec.querySelector<HTMLInputElement>('#addr-ghost')!;
     addr.placeholder = isSolo() ? 'Add a friend to meet in the middle…' : `＋ Add person ${SLOT[i].toUpperCase()} — address…`;
     wireAddrInput(addr, 'ghost');
-    renderModePills(sec.querySelector('#modes-ghost')!, ghostMode, (m) => {
+    const ghostBox = sec.querySelector('#modes-ghost')!;
+    const pickGhost = (m: Mode): void => {
       ghostMode = m;
-      renderPeople();
-    });
+      renderModePills(ghostBox, m, pickGhost); // pills only — keep any typed address
+    };
+    renderModePills(ghostBox, ghostMode, pickGhost);
   }
 
   syncMarkers();
@@ -657,6 +679,7 @@ function commitLocation(target: number | 'ghost', hit: GeoHit, input: HTMLInputE
   exactCache.get(p.id)?.clear();
   markers.get(p.id)?.setLatLng(hit.pt);
   map.panTo(hit.pt);
+  closeDetail(); // open card + routes were computed from the old location
   coverageWarning(p);
   scheduleRecompute();
   syncUrl();
@@ -670,10 +693,19 @@ function wireAddrInput(input: HTMLInputElement, target: number | 'ghost'): void 
 
   let hits: GeoHit[] = [];
   let sel = -1;
+  let committing = false; // one commit at a time — double-Enter can't double-add
+  let suppressUntil = 0; // a just-committed input ignores late suggester results
 
   const close = () => {
     drop.hidden = true;
     sel = -1;
+  };
+
+  const commit = (hit: GeoHit) => {
+    suppressUntil = Date.now() + 900;
+    hits = [];
+    close();
+    commitLocation(target, hit, input); // target = person id, NEVER a row index
   };
 
   const renderDrop = () => {
@@ -685,14 +717,14 @@ function wireAddrInput(input: HTMLInputElement, target: number | 'ghost'): void 
       row.textContent = h.label;
       row.onmousedown = (e) => {
         e.preventDefault(); // beat the blur
-        close();
-        commitLocation(target, h, input); // target = person id, NEVER a row index
+        commit(h);
       };
       drop.appendChild(row);
     });
   };
 
   const suggester = makeSuggester((results) => {
+    if (Date.now() < suppressUntil) return; // stale response after a commit
     hits = results;
     sel = -1;
     renderDrop();
@@ -717,22 +749,27 @@ function wireAddrInput(input: HTMLInputElement, target: number | 'ghost'): void 
     } else if (e.key === 'Escape') {
       close();
     } else if (e.key === 'Enter') {
-      if (!input.value.trim()) return;
+      if (!input.value.trim() || committing) return;
       const picked = sel >= 0 ? hits[sel] : hits[0];
-      close();
       if (picked) {
-        commitLocation(target, picked, input);
+        commit(picked);
         return;
       }
-      // No suggestions — precise Nominatim fallback.
+      // No suggestions — precise Nominatim fallback (guarded: a second Enter
+      // while this awaits must not commit twice → duplicate people).
+      committing = true;
       setStatus('Locating…');
-      const hit = await geocode(input.value.trim());
-      if (!hit) {
-        setStatus('Address not found — try adding a borough', 2600);
-        input.classList.add('bad');
-        return;
+      try {
+        const hit = await geocode(input.value.trim());
+        if (!hit) {
+          setStatus('Address not found — try adding a borough', 2600);
+          input.classList.add('bad');
+          return;
+        }
+        commit(hit);
+      } finally {
+        committing = false;
       }
-      commitLocation(target, hit, input);
     }
   });
 }
@@ -842,6 +879,9 @@ const gmaps = (v: Venue) =>
   `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${v.name} ${v.addr || ''} New York`)}`;
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+
+/** Minutes for display — unreachable renders as a dash, never "Infinity′". */
+const fmtMin = (t: number): string => (isFinite(t) ? `${Math.round(t)}′` : '—');
 
 function venueTags(v: Venue): string {
   const tags: string[] = [];
@@ -989,9 +1029,9 @@ function showDetail(v: Venue): void {
     const [p0, p1] = state.people;
     openDetail(
       v,
-      `<tr><td><span class="ca">${esc(personLabel(0))} · ${MODE_LABEL[p0.mode]}</span></td><td>${Math.round(tA)}′</td>` +
-        `<td><span class="cb">${esc(personLabel(1))} · ${MODE_LABEL[p1.mode]}</span></td><td>${Math.round(tB)}′</td>` +
-        `<td class="gap">Δ${Math.round(Math.abs(tA - tB))}′</td></tr>`,
+      `<tr><td><span class="ca">${esc(personLabel(0))} · ${MODE_LABEL[p0.mode]}</span></td><td>${fmtMin(tA)}</td>` +
+        `<td><span class="cb">${esc(personLabel(1))} · ${MODE_LABEL[p1.mode]}</span></td><td>${fmtMin(tB)}</td>` +
+        `<td class="gap">${isFinite(tA) && isFinite(tB) ? `Δ${Math.round(Math.abs(tA - tB))}′` : '—'}</td></tr>`,
     );
     return;
   }
@@ -1062,7 +1102,10 @@ async function refineVenues(venues: Venue[]): Promise<void> {
         if (!mins) return;
         const c = exactCache.get(snap.id); // person may be gone — write nowhere
         const live = personById(snap.id);
-        if (!c || !live || live.pt !== snap.pt) return;
+        // Daypart gate: car minutes are scaled by the SNAPSHOT hour — if the
+        // user switched dayparts mid-flight, these values are for the wrong
+        // hour and must not land in the (already purged) cache.
+        if (!c || !live || live.pt !== snap.pt || state.daypart !== daypart) return;
         missing.forEach((v, k) => {
           const t = mins[k];
           c.set(`${snap.mode}:${v.id}`, snap.mode === 'car' && t != null ? carDaypartMin(t, daypart) : t);
@@ -1072,7 +1115,10 @@ async function refineVenues(venues: Venue[]): Promise<void> {
   }
   if (!jobs.length) return;
   await Promise.all(jobs);
-  if (token === refineToken) renderVenues(); // no missing left → no re-refine loop
+  // Through the scheduler, not renderVenues() directly: if the roster changed
+  // while we were routing, recompute rebuilds the core for the NEW headcount
+  // first (rendering stale group fields against fewer colors would throw).
+  if (token === refineToken) scheduleRecompute(true);
 }
 
 // ── Venue list ───────────────────────────────────────────────
@@ -1295,8 +1341,8 @@ function renderShortlist(favs: Set<string>): void {
     const worst = Math.max(...times);
     const li = document.createElement('li');
     const timesHtml = isDuo()
-      ? `<span class="sl-times"><b class="ta">${Math.round(times[0])}′</b>/<b class="tb">${Math.round(times[1])}′</b></span>`
-      : `<span class="sl-times"><b class="ta">${isFinite(worst) ? Math.round(isSolo() ? times[0] : worst) + '′' : '—'}</b></span>`;
+      ? `<span class="sl-times"><b class="ta">${fmtMin(times[0])}</b>/<b class="tb">${fmtMin(times[1])}</b></span>`
+      : `<span class="sl-times"><b class="ta">${isFinite(worst) ? fmtMin(isSolo() ? times[0] : worst) : '—'}</b></span>`;
     li.innerHTML =
       `<span class="sl-name">${venueEmoji(v)} ${esc(v.name)}</span>` + timesHtml + `<button class="sl-remove" title="remove">✕</button>`;
     li.querySelector<HTMLButtonElement>('.sl-remove')!.onclick = (e) => {
@@ -1669,7 +1715,7 @@ if (!shared.a && !shared.b) {
 }
 
 document.getElementById('share-link')!.onclick = async () => {
-  syncUrl();
+  syncUrlNow(); // flush the debounce — the copied link must be current
   try {
     await navigator.clipboard.writeText(location.href);
     setStatus('Link copied — send it! 💌', 2400);
