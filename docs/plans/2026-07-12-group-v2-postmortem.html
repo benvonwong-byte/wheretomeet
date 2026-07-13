@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Group Meetups v1 Post-Mortem → v2 Fork Design</title>
+<style>
+  :root{--ink:#f2f5f0;--rail:#fff;--line:#dbe2d4;--paper:#1f2617;--text:#3c4433;--dim:#7f8874;
+    --a:#4f8f00;--b:#7b2cbf;--hot:#e0445a;--amber:#e2a400;--vegan:#61a60e;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;--sans:'Archivo','Helvetica Neue',sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ink);color:var(--text);font-family:var(--sans);line-height:1.55;padding:40px 20px 80px}
+  .wrap{max-width:860px;margin:0 auto}
+  header{border-bottom:4px solid var(--paper);padding-bottom:18px;margin-bottom:10px}
+  h1{font-family:Georgia,serif;font-weight:700;font-size:34px;letter-spacing:-.02em;color:var(--paper);margin:0}
+  h1 em{font-style:italic;color:var(--hot)}
+  .sub{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin-top:8px}
+  h2{font-family:Georgia,serif;font-size:23px;color:var(--paper);margin:36px 0 6px;font-weight:650}
+  h2 .n{font-family:var(--mono);font-size:13px;color:var(--vegan);margin-right:10px}
+  p{margin:8px 0}
+  code{font-family:var(--mono);font-size:.85em;background:#eef2ea;padding:1px 5px;border-radius:4px}
+  .card{background:var(--rail);border:1px solid var(--line);border-radius:14px;padding:16px 20px;margin:12px 0}
+  .smoking{background:#fde8e8;border:1.5px solid var(--hot);border-radius:14px;padding:16px 20px;margin:14px 0}
+  .smoking b{color:#a3352f}
+  .fix{background:#ecf6df;border:1px solid var(--vegan);border-radius:14px;padding:14px 18px;margin:12px 0}
+  .fix b{color:#3f7212}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+  .sev{display:inline-block;padding:1px 8px;border-radius:999px;font:700 10px var(--sans);color:#fff}
+  .hi{background:var(--hot)}.md{background:var(--amber)}.lo{background:#a8ad9f}
+  ul{margin:8px 0;padding-left:22px}li{margin:5px 0}
+  .code{background:var(--paper);color:#eef2ea;border-radius:10px;padding:12px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.65;overflow-x:auto}
+  .code .k{color:#c9e88b}.code .bad{color:#ff8f8f}.code .c{color:#8b9c7e}
+  .lesson{border-left:3px solid var(--b);padding:2px 0 2px 14px;margin:10px 0}
+</style>
+</head>
+<body><div class="wrap">
+<header>
+  <h1>Group Meetups v1: <em>what actually broke</em> → v2 fork</h1>
+  <div class="sub">Thyme &amp; Place · post-mortem of the reverted 3–5 person feature · branch group-v2 · main untouched</div>
+</header>
+
+<h2><span class="n">01</span>The smoking gun</h2>
+<div class="smoking">
+  <b>One shadowed variable caused most of what you experienced.</b> In the address-suggestion dropdown:
+  <div class="code" style="margin-top:10px">
+hits.forEach((h, <span class="bad">i</span>) =&gt; {            <span class="c">// ← this i is the DROPDOWN ROW NUMBER…</span><br>
+&nbsp;&nbsp;row.onmousedown = () =&gt; applyLocation(<span class="bad">i</span>, h, input);  <span class="c">// …but applyLocation expects the PERSON index</span><br>
+});
+  </div>
+  <p style="margin-top:10px">So <b>mouse-clicking</b> the first suggestion in <i>any</i> person's box always moved <b>Person A</b>. Clicking the 2nd moved B. Clicking the 3rd suggestion in a 2-person plan threw a TypeError and silently died. The text landed in the box you typed in, but the pin, state, and URL mutated a <i>different</i> person — the exact "address bar and map de-synced" you reported. Keyboard-Enter used the correct index, which is why it slipped past my automated checks: <b>they pressed Enter; you clicked.</b></p>
+</div>
+
+<h2><span class="n">02</span>The full confirmed bug ledger</h2>
+<p>From the black-hat audit (5 independent reviewers, findings verified against source) plus the ones found live:</p>
+<table>
+  <tr><th></th><th>Bug</th><th>Root cause class</th></tr>
+  <tr><td><span class="sev hi">HIGH</span></td><td>Suggestion click moves the wrong person / crashes on 3rd+ row</td><td>shadowed index</td></tr>
+  <tr><td><span class="sev hi">HIGH</span></td><td>"Add a person" from near-me creates a phantom copy of you (B stacked on A), skewing group fairness &amp; share links</td><td>solo-mirror hack</td></tr>
+  <tr><td><span class="sev hi">HIGH</span></td><td>Re-added person silently inherits the <i>previous</i> occupant's travel-time field (wrong times, no error)</td><td>index-keyed caches leak across roster changes</td></tr>
+  <tr><td><span class="sev hi">HIGH</span></td><td>A "%" in a shared member's name/label → <code>URIError</code> at boot → blank page for the recipient</td><td>double URL-decode, unguarded top-level parse</td></tr>
+  <tr><td><span class="sev md">MED</span></td><td>Async OSRM callback dereferences a spliced index → TypeError, lost recompute</td><td>async closures capture indices</td></tr>
+  <tr><td><span class="sev md">MED</span></td><td>B's pin resurfaces at a stale location after near-me → pin and state disagree</td><td>marker updated in some paths, not others</td></tr>
+  <tr><td><span class="sev md">MED</span></td><td>Swap glues names to the wrong person (old name-swap line cancels the new object swap through compat getters)</td><td>compat shims half-working</td></tr>
+  <tr><td><span class="sev md">MED</span></td><td>Mode change in near-me mirrors state to B but never re-renders B's pills</td><td>DOM patched per-site, not re-rendered</td></tr>
+  <tr><td><span class="sev md">MED</span></td><td>C/D/E address text wiped on every add/remove (label stored only in the DOM, rows rebuilt empty)</td><td>DOM as source of truth</td></tr>
+  <tr><td><span class="sev lo">LOW</span></td><td>Stale detail card &amp; route legs after roster changes; strand­ed "pending" field upgrades after swap; commas stripped from C/D/E addresses on share; λ-glow staleness</td><td>assorted, same classes</td></tr>
+</table>
+
+<h2><span class="n">03</span>Why v1 kept bleeding — five structural causes</h2>
+<div class="lesson"><b>1 · Three sources of truth, patched by hand.</b> <code>state.people</code>, the DOM inputs, and the map markers each held part of the truth. Every mutation path (type address, click suggestion, drag pin, add, remove, swap, near-me, mode click) had to remember to update all three. Each bug was one forgotten update. There were ~10 mutation paths × 3 surfaces = 30 chances to forget.</div>
+<div class="lesson"><b>2 · Everything keyed by array index.</b> <code>people[]</code>, <code>markers[]</code>, <code>exactCache[]</code> spliced in parallel; <code>fieldCache</code> keyed <code>"2:transit"</code>; async callbacks capturing <code>i</code>. Every remove shifted every index under everything in flight.</div>
+<div class="lesson"><b>3 · The solo-mirror hack.</b> "Near-me" was faked as <i>two people where B secretly copies A</i>. That one lie produced the phantom-B, the stale-marker, the uncommitted-text wipe, and the cache leaks at every solo↔group transition.</div>
+<div class="lesson"><b>4 · Back-compat getters (<code>state.A</code>, <code>nameA</code>) kept old code half-alive.</b> The swap bug is the poster child: an obsolete name-swap line still "worked" through the setters and silently un-did the real swap.</div>
+<div class="lesson"><b>5 · Verification exercised the keyboard path, never the mouse path.</b> Process failure, not code: the matrix must drive the app the way you do.</div>
+
+<h2><span class="n">04</span>The v2 architecture (branch <code>group-v2</code>)</h2>
+<div class="fix"><b>Stable IDs, one source of truth, declarative render.</b> Same product design you approved (blend fairness, λ slider, per-person colors); rebuilt internals.</div>
+<ul>
+  <li><b>Person = <code>{ id, pt, mode, name, label }</code></b> — a monotonic <code>id</code> that never shifts; a <b>single</b> mode (the Set was dead generality); and the committed <b>address label lives on the person</b>, not in the DOM.</li>
+  <li><b>No solo-mirror.</b> Near-me is simply <code>people.length === 1</code>. Person B does not exist until committed. The UI always shows a <b>ghost slot</b> — the next person's address box with live mode pills — so nothing is hidden; committing it creates the person.</li>
+  <li><b>ID-keyed everything.</b> <code>markers: Map&lt;id, Marker&gt;</code>, <code>exactCache: Map&lt;id, …&gt;</code>, <code>fieldCache["id:mode:daypart"]</code>. Removing a person purges their id; nothing else moves. <b>Swap becomes a pure array reorder — zero cache surgery</b> (v1's swap needed 20 lines of cache renames; v2 needs none).</li>
+  <li><b>One <code>renderPeople()</code></b> rebuilds every row from state after any change — labels, pills, bullets, remove buttons all reflect state by construction. No per-slot patching, no compat getters, mouse and keyboard share one commit path that captures the <b>person id</b>, never a loop index.</li>
+  <li><b>Async safety:</b> callbacks capture <code>{id, pt}</code> and re-resolve the person by id on completion; caches are id-keyed so a stale write can't land on the wrong person. Roster changes close the detail card and bump route/refine tokens.</li>
+  <li><b>Share links:</b> ≤2 people use the exact current wire format (all existing links keep working). Extras ride in <code>p=</code>, parsed from the <b>raw hash</b> and decoded exactly once inside a try/catch — %, commas, and semicolons in names/addresses round-trip safely, and a malformed link can never blank the app.</li>
+  <li><b>Modes by headcount:</b> 1 = near-me closeness glow · 2 = today's duo, pixel-identical (dial, advantage heat, swap, Δ table) · 3–5 = blend ranking, λ slider, <b>per-person colored heat</b> (each person's color, blended where even — the thing you asked for).</li>
+</ul>
+
+<h2><span class="n">05</span>Verification bar before it's called anything</h2>
+<ul>
+  <li>The full matrix on desktop <b>and</b> mobile, exercising <b>mouse clicks on suggestions</b> (row 1, row 2, row 3+) for every person slot — the path that hid the smoking gun.</li>
+  <li>Roster torture: add→remove→add, near-me↔duo↔group round trips, swap with names+addresses set, drag-pin after typing, remove during in-flight routing.</li>
+  <li>Share round-trips incl. "%"/comma names, old-format links, and cross-checking pin positions against state after every step.</li>
+  <li>All unit tests + an independent adversarial review of the diff before the branch is offered for a test drive. <b>Main and the live site stay untouched throughout.</b></li>
+</ul>
+
+</div></body></html>

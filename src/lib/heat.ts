@@ -59,3 +59,65 @@ export function renderHeat(gap: TimeField, venueCells: number[], grid: GridSpec,
   ctx.putImageData(img, 0, 0);
   return canvas;
 }
+
+// Group mode (3+): per-person advantage heat — each person paints in their own
+// colour, weighted by how fast they reach each spot. Where one person dominates
+// you see their colour; where several are even, the colours blend. This is the
+// N-person generalization of the 2-person green↔purple advantage gradient.
+const GROUP_HUE_SCALE = 16; // minutes: smaller = sharper colour boundaries
+
+export function renderGroupHeat(
+  fields: TimeField[],
+  colors: [number, number, number][],
+  venueCells: number[],
+  grid: GridSpec,
+): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = grid.cols;
+  canvas.height = grid.rows;
+  const ctx = canvas.getContext('2d')!;
+  const img = ctx.createImageData(grid.cols, grid.rows);
+  if (!venueCells.length || !fields.length) return canvas;
+
+  const weight = new Float32Array(fields[0].length);
+  for (const cell of venueCells) {
+    if (cell < 0) continue;
+    const vr = Math.floor(cell / grid.cols);
+    const vc = cell % grid.cols;
+    for (let r = Math.max(0, vr - WINDOW); r <= Math.min(grid.rows - 1, vr + WINDOW); r++) {
+      for (let c = Math.max(0, vc - WINDOW); c <= Math.min(grid.cols - 1, vc + WINDOW); c++) {
+        const d2 = (r - vr) ** 2 + (c - vc) ** 2;
+        weight[r * grid.cols + c] += Math.exp(-d2 / (2 * SIGMA_CELLS * SIGMA_CELLS));
+      }
+    }
+  }
+
+  for (let r = 0; r < grid.rows; r++) {
+    for (let c = 0; c < grid.cols; c++) {
+      const i = r * grid.cols + c;
+      if (weight[i] < 0.12) continue;
+      // Softmax-ish colour blend: each person's weight = exp(-theirTime/scale).
+      let wr = 0;
+      let wg = 0;
+      let wb = 0;
+      let wsum = 0;
+      for (let p = 0; p < fields.length; p++) {
+        const t = fields[p][i];
+        if (!isFinite(t)) continue;
+        const w = Math.exp(-t / GROUP_HUE_SCALE);
+        wr += w * colors[p][0];
+        wg += w * colors[p][1];
+        wb += w * colors[p][2];
+        wsum += w;
+      }
+      if (wsum <= 0) continue; // all unreachable here → transparent
+      const o = ((grid.rows - 1 - r) * grid.cols + c) * 4; // grid row 0 is south
+      img.data[o] = wr / wsum;
+      img.data[o + 1] = wg / wsum;
+      img.data[o + 2] = wb / wsum;
+      img.data[o + 3] = MAX_ALPHA * Math.min(1, weight[i]) ** 0.7;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas;
+}
