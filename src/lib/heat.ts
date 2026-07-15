@@ -60,26 +60,43 @@ export function renderHeat(gap: TimeField, venueCells: number[], grid: GridSpec,
   return canvas;
 }
 
-// Group mode (3+): per-person advantage heat — each person paints in their own
-// colour, weighted by how fast they reach each spot. Where one person dominates
-// you see their colour; where several are even, the colours blend. This is the
-// N-person generalization of the 2-person green↔purple advantage gradient.
-const GROUP_HUE_SCALE = 16; // minutes: smaller = sharper colour boundaries
+// Group mode (3+): ONE benefit axis, like the duo gradient. Green = this
+// ground works for everyone (high blend score at the current λ), yellow =
+// decent, purple = somebody gets a rough trip. Five distinct person hues
+// blended together were unreadable — a single scale answers the actual
+// question: "which areas benefit the most people?"
+export function benefitColor(t: number): [number, number, number] {
+  const x = Math.max(0, Math.min(1, t));
+  const [c0, c1, f] = x < 0.5 ? [B_RGB, MID_RGB, x * 2] : [MID_RGB, A_RGB, (x - 0.5) * 2];
+  return [
+    Math.round(c0[0] + (c1[0] - c0[0]) * f),
+    Math.round(c0[1] + (c1[1] - c0[1]) * f),
+    Math.round(c0[2] + (c1[2] - c0[2]) * f),
+  ];
+}
 
-export function renderGroupHeat(
-  fields: TimeField[],
-  colors: [number, number, number][],
-  venueCells: number[],
-  grid: GridSpec,
-): HTMLCanvasElement {
+export function renderGroupBenefit(scores: TimeField, venueCells: number[], grid: GridSpec): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = grid.cols;
   canvas.height = grid.rows;
   const ctx = canvas.getContext('2d')!;
   const img = ctx.createImageData(grid.cols, grid.rows);
-  if (!venueCells.length || !fields.length) return canvas;
+  if (!venueCells.length) return canvas;
 
-  const weight = new Float32Array(fields[0].length);
+  // Contrast-stretch across the recommended zone: the best venue ground is
+  // pure green, the viability-gate edge trails toward yellow/purple.
+  let hi = 0;
+  let lo = Infinity;
+  for (const cell of venueCells) {
+    if (cell < 0) continue;
+    const s = scores[cell];
+    if (s > hi) hi = s;
+    if (s < lo) lo = s;
+  }
+  if (hi <= 0) return canvas;
+  const span = Math.max(hi - lo, hi * 0.15); // guard: one venue ≠ all-green flatline
+
+  const weight = new Float32Array(scores.length);
   for (const cell of venueCells) {
     if (cell < 0) continue;
     const vr = Math.floor(cell / grid.cols);
@@ -95,26 +112,12 @@ export function renderGroupHeat(
   for (let r = 0; r < grid.rows; r++) {
     for (let c = 0; c < grid.cols; c++) {
       const i = r * grid.cols + c;
-      if (weight[i] < 0.12) continue;
-      // Softmax-ish colour blend: each person's weight = exp(-theirTime/scale).
-      let wr = 0;
-      let wg = 0;
-      let wb = 0;
-      let wsum = 0;
-      for (let p = 0; p < fields.length; p++) {
-        const t = fields[p][i];
-        if (!isFinite(t)) continue;
-        const w = Math.exp(-t / GROUP_HUE_SCALE);
-        wr += w * colors[p][0];
-        wg += w * colors[p][1];
-        wb += w * colors[p][2];
-        wsum += w;
-      }
-      if (wsum <= 0) continue; // all unreachable here → transparent
+      if (weight[i] < 0.12 || !isFinite(scores[i])) continue;
+      const [cr, cg, cb] = benefitColor((scores[i] - lo) / span);
       const o = ((grid.rows - 1 - r) * grid.cols + c) * 4; // grid row 0 is south
-      img.data[o] = wr / wsum;
-      img.data[o + 1] = wg / wsum;
-      img.data[o + 2] = wb / wsum;
+      img.data[o] = cr;
+      img.data[o + 1] = cg;
+      img.data[o + 2] = cb;
       img.data[o + 3] = MAX_ALPHA * Math.min(1, weight[i]) ** 0.7;
     }
   }

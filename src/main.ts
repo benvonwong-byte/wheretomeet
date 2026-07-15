@@ -9,7 +9,7 @@ import { buildGraph, transitPath, type TransitGraph } from './lib/transit';
 import { timeField, comboLayer, minPersonField, scoreAtPoint, fairnessScore, groupScore, groupLayer } from './lib/fairness';
 import { maskField } from './lib/contours';
 import landmaskData from './data/landmask.json';
-import { renderHeat, renderGroupHeat } from './lib/heat';
+import { renderHeat, renderGroupBenefit } from './lib/heat';
 import { filterVenues } from './lib/venues';
 import { geocode, makeSuggester, type GeoHit } from './lib/geocode';
 import { routedMinutes, routedField, routedGeometry } from './lib/osrm';
@@ -68,13 +68,6 @@ const MODE_LABEL = Object.fromEntries(MODES.map((m) => [m.id, m.label])) as Reco
 // SLOT (A green, B purple, …); people keep their own id for caches/markers.
 const SLOT = ['a', 'b', 'c', 'd', 'e'] as const;
 const PERSON_COLORS = ['#4f8f00', '#7b2cbf', '#009e8f', '#e0662a', '#2f6fd0'];
-const PERSON_RGB: [number, number, number][] = [
-  [79, 143, 0],
-  [123, 44, 191],
-  [0, 158, 143],
-  [224, 102, 42],
-  [47, 111, 208],
-];
 const MAX_PEOPLE = 5;
 
 // ── State ────────────────────────────────────────────────────
@@ -423,10 +416,7 @@ function applyNames(): void {
     }
     markers.get(p.id)?.setIcon(bulletIcon(i, personInitial(i)));
   });
-  const advA = document.querySelector('.adv-labels .adv-a');
-  const advB = document.querySelector('.adv-labels .adv-b');
-  if (advA) advA.textContent = `${personLabel(0)} sooner`;
-  if (advB) advB.textContent = `${personLabel(1)} sooner`;
+  renderMapKey();
   updateBiasLabel();
   renderSortChips();
   updatePlanBar();
@@ -600,9 +590,32 @@ function wireBias(): void {
 // Mode-dependent chrome, all in one place, driven purely by headcount.
 function syncModeUi(): void {
   (document.querySelector('#tuning-panel .bias') as HTMLElement).hidden = isSolo();
-  (document.getElementById('layers-panel') as HTMLElement).hidden = !isDuo(); // advantage key: duo only
+  (document.getElementById('layers-panel') as HTMLElement).hidden = isSolo(); // map key: duo + group
   (document.getElementById('sort-chips') as HTMLElement).hidden = !isDuo(); // A/B sorts: duo only
+  renderMapKey();
   configureSlider();
+}
+
+// The map key explains whichever heat is on screen: duo = whose side of the
+// gradient, group = one benefit axis (purple → yellow → green).
+function renderMapKey(): void {
+  const note = document.querySelector('#layers-panel .key-note');
+  const bar = document.querySelector('#layers-panel .adv-bar') as HTMLElement | null;
+  const labels = document.querySelector('#layers-panel .adv-labels');
+  if (!note || !bar || !labels) return;
+  if (isGroup()) {
+    note.textContent = 'The heat sits on the zone of recommended spots. Color = how well a spot serves the whole group:';
+    bar.style.background = 'linear-gradient(90deg, #7b2cbf, #ffcd14, #61a60e)';
+    labels.innerHTML =
+      '<span class="adv-b">tough for some</span><span class="adv-mid">okay</span><span class="adv-a">best for everyone</span>';
+  } else {
+    note.textContent = 'The heat sits on the zone of recommended spots. Color = advantage:';
+    bar.style.background = '';
+    labels.innerHTML =
+      `<span class="adv-a">${esc(personLabel(0))} sooner</span>` +
+      `<span class="adv-mid">even</span>` +
+      `<span class="adv-b">${esc(personLabel(1))} sooner</span>`;
+  }
 }
 
 // ── UI: filters ──────────────────────────────────────────────
@@ -869,8 +882,11 @@ function drawContours(): void {
     return;
   }
   if (isGroup() && lastGroup) {
-    const maskedFields = lastGroup.times.map((f) => maskField(f.slice(), LANDMASK));
-    setHeat(renderGroupHeat(maskedFields, PERSON_RGB.slice(0, nPeople()), shownVenueCells, GRID).toDataURL(), 0.72);
+    // One benefit axis: green = best for everyone at the current λ, purple =
+    // somebody gets a rough trip. Tracks the fairness slider because the
+    // scores are the λ-blended groupLayer output.
+    const masked = maskField(lastGroup.scores.slice(), LANDMASK);
+    setHeat(renderGroupBenefit(masked, shownVenueCells, GRID).toDataURL(), 0.75);
   }
 }
 

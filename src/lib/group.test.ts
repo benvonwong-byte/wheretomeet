@@ -1,5 +1,19 @@
 import { describe, it, expect } from 'vitest';
 import { groupScore, groupLayer } from './fairness';
+import { benefitColor } from './heat';
+
+describe('benefitColor (group heat scale)', () => {
+  it('0 = cow purple (tough for some), 0.5 = star yellow, 1 = leafy green (best for everyone)', () => {
+    expect(benefitColor(0)).toEqual([123, 44, 191]);
+    expect(benefitColor(0.5)).toEqual([255, 205, 20]);
+    expect(benefitColor(1)).toEqual([97, 166, 14]);
+  });
+
+  it('clamps out-of-range input', () => {
+    expect(benefitColor(-2)).toEqual(benefitColor(0));
+    expect(benefitColor(9)).toEqual(benefitColor(1));
+  });
+});
 
 describe('groupScore (3+ people blend)', () => {
   // The design's worked example: balanced spot vs one-far spot.
