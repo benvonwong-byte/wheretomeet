@@ -34,7 +34,7 @@ jobs:
           fi
       - run: npm run build
         env:
-          PAGES_BASE: /wheretomeet/
+          PAGES_BASE: /${{ github.event.repository.name }}/
           VITE_ROUTES_KEY: ${{ secrets.ROUTES_WEB_KEY }}
       - uses: actions/upload-pages-artifact@v3
         with:
