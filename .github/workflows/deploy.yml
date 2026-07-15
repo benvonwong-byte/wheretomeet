@@ -36,6 +36,22 @@ jobs:
         env:
           PAGES_BASE: /wheretomeet/
           VITE_ROUTES_KEY: ${{ secrets.ROUTES_WEB_KEY }}
+      # Beta test-drive: the group-v2 branch rides along at /beta/. Best-effort —
+      # a broken beta must never block the main site's deploy.
+      - name: Build group-v2 beta into dist/beta
+        continue-on-error: true
+        env:
+          VITE_ROUTES_KEY: ${{ secrets.ROUTES_WEB_KEY }}
+        run: |
+          set -e
+          git fetch --depth 1 origin group-v2
+          git worktree add /tmp/beta origin/group-v2
+          cd /tmp/beta
+          npm ci
+          npx vitest run
+          PAGES_BASE=/wheretomeet/beta/ npm run build
+          mkdir -p "$GITHUB_WORKSPACE/dist/beta"
+          cp -r dist/* "$GITHUB_WORKSPACE/dist/beta/"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
