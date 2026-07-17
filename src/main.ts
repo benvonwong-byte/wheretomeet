@@ -1063,6 +1063,8 @@ function buildMobileLayout(): void {
   rail.insertBefore(document.getElementById('detail')!, handle.nextSibling);
   // Shortlist tucks under the list header so peek always leads with the count.
   rail.querySelector('.venues-panel')!.insertBefore(document.getElementById('shortlist')!, document.getElementById('sort-chips'));
+  // Submit-a-spot rides above the list — below it, the half-height sheet never scrolls far enough to tap it.
+  rail.querySelector('.venues-panel')!.insertBefore(document.getElementById('add-spot')!, document.getElementById('venues'));
 
   const fab = document.createElement('button');
   fab.id = 'locate-fab';
