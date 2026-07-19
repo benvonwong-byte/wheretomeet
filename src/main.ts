@@ -103,7 +103,19 @@ if (shared.bias != null) state.bias = shared.bias;
 if (shared.daypart) state.daypart = shared.daypart;
 if (shared.favs?.length) seedFavs(state.A.pt, state.B.pt, shared.favs);
 
+// Throttled to 1/s: every render syncs, and iOS Safari throws once
+// replaceState exceeds ~100 calls per 30s.
+let syncTimer = 0;
+let lastSyncAt = 0;
+
 function syncUrl(): void {
+  const now = Date.now();
+  if (now - lastSyncAt < 1000) {
+    window.clearTimeout(syncTimer);
+    syncTimer = window.setTimeout(syncUrl, 1000 - (now - lastSyncAt));
+    return;
+  }
+  lastSyncAt = now;
   const hash = encodeShare({
     a: state.A.pt,
     b: state.B.pt,
@@ -118,7 +130,11 @@ function syncUrl(): void {
     favs: [...loadFavs(state.A.pt, state.B.pt)],
     solo: state.solo || undefined,
   });
-  history.replaceState(null, '', hash);
+  try {
+    history.replaceState(null, '', hash);
+  } catch {
+    /* replaceState quota hit — the next sync carries the same state */
+  }
 }
 
 const fieldCache = new Map<string, TimeField>();
@@ -178,6 +194,18 @@ function activeCombos(): { a: Mode; b: Mode }[] {
 const VP_W = window.innerWidth || document.documentElement.clientWidth;
 const IS_MOBILE = VP_W > 0 && VP_W <= 760;
 const IS_TOUCH = window.matchMedia('(pointer: coarse)').matches;
+
+// The mobile layout rebuilds the DOM at boot, so crossing the 760px breakpoint
+// live (phone rotation) strands mobile DOM under desktop CSS — reload instead;
+// the URL hash carries the whole plan across.
+window.matchMedia('(max-width: 760px)').addEventListener('change', (e) => {
+  if (e.matches !== IS_MOBILE) location.reload();
+});
+
+// Boot-time auto-locate must not yank the map from under a user who has
+// already started browsing.
+let userInteracted = false;
+window.addEventListener('pointerdown', () => (userInteracted = true), { once: true, capture: true });
 
 const map = L.map('map', { zoomControl: false }).setView([40.745, -73.96], 12);
 if (!IS_MOBILE) L.control.zoom({ position: 'bottomright' }).addTo(map); // touch pinches instead
@@ -486,8 +514,10 @@ function wireInput(who: 'A' | 'B'): void {
       const row = document.createElement('div');
       row.className = 'suggest-row' + (i === sel ? ' sel' : '');
       row.textContent = h.label;
-      row.onmousedown = (e) => {
-        e.preventDefault(); // beat the blur
+      // pointerdown keeps the input focused (beats the blur-close); click
+      // commits — mousedown alone dies silently on touch if the finger drifts.
+      row.onpointerdown = (e) => e.preventDefault();
+      row.onclick = () => {
         close();
         applyLocation(who, h, input);
       };
@@ -691,6 +721,9 @@ async function drawRoutes(v: Venue, modeA: Mode, modeB: Mode): Promise<void> {
     // transit = schematic station hops; unrouted street = rough estimate
     dashArray: mode === 'transit' ? '2 8' : routed ? undefined : '10 10',
     lineCap: 'round' as const,
+    // Decorative: Leaflet paths bubble clicks to the map by default, and a
+    // map click closes the very card these routes belong to.
+    interactive: false,
   });
   // Keep the user's viewport — auto-fitting to the route yanked the zoom out.
   L.polyline(ra.path, style('#4f8f00', modeA, ra.routed)).addTo(routeLayer);
@@ -750,6 +783,9 @@ function showDetail(v: Venue, combos: { modeA: Mode; modeB: Mode; tA: number; tB
   const headline = pickCombo(combos, state.sortBy);
   void drawRoutes(v, headline.modeA, headline.modeB);
   if (IS_MOBILE) {
+    // The card sits at the top of the sheet — a list scrolled at full would
+    // otherwise leave it stranded above the screen.
+    detailEl.closest('#rail')!.scrollTop = 0;
     sheetTo('half');
     map.panInside([v.lat, v.lng], {
       paddingTopLeft: [24, 130],
@@ -1020,7 +1056,7 @@ function renderShortlist(favs: Set<string>): void {
 // snaps (peek/half/full), one scrollable chip strip, plan pill that expands
 // to the address editor, locate FAB, no zoom buttons on touch.
 type SheetPos = 'peek' | 'half' | 'full';
-let sheetTo: (pos: SheetPos) => void = () => {};
+let sheetTo: (pos: SheetPos, animate?: boolean) => void = () => {};
 let planEditorOpen: (open: boolean) => void = () => {};
 let updatePlanBar: () => void = () => {};
 
@@ -1070,7 +1106,7 @@ function buildMobileLayout(): void {
   fab.id = 'locate-fab';
   fab.title = 'Use my location';
   fab.textContent = '\u{1F4CD}';
-  fab.onclick = locateMe;
+  fab.onclick = () => locateMe(); // wrapper: onclick would pass the event as onlyIfIdle
   document.body.appendChild(fab);
 
   // Solo-only invitation to go duo — opens the editor on Person B.
@@ -1100,11 +1136,16 @@ function buildMobileLayout(): void {
   });
 
   let pos: SheetPos = 'peek';
-  sheetTo = (p: SheetPos) => {
+  sheetTo = (p: SheetPos, animate = true) => {
     pos = p;
-    rail.classList.add('snap');
+    rail.classList.toggle('snap', animate);
     rail.classList.toggle('at-full', p === 'full');
-    rail.style.transform = `translateY(${offsets()[p]}px)`;
+    const off = offsets()[p];
+    rail.style.transform = `translateY(${off}px)`;
+    // The rail hangs `off` px below the viewport — pad the bottom to match so
+    // the last rows can scroll into view (read by the CSS padding-bottom).
+    rail.style.setProperty('--sheet-off', `${off}px`);
+    if (p === 'peek') rail.scrollTop = 0; // peek always leads with the header
     fab.classList.toggle('gone', p !== 'peek');
   };
 
@@ -1114,18 +1155,26 @@ function buildMobileLayout(): void {
   let lastY = 0;
   let lastT = 0;
   let vel = 0;
+  let moved = false;
   let dragging = false;
   const dragStart = (e: PointerEvent) => {
+    if (!e.isPrimary) return; // a second finger must not re-base the drag
     dragging = true;
+    moved = false;
+    vel = 0; // stale fling velocity would replay on a plain tap in dragEnd
     y0 = e.clientY;
-    o0 = offsets()[pos];
+    // Read the LIVE transform, not the snap target — grabbing mid-animation
+    // teleported the sheet to where the animation was headed.
+    const m = new DOMMatrixReadOnly(getComputedStyle(rail).transform);
+    o0 = m.m42 || offsets()[pos];
     lastY = e.clientY;
     lastT = e.timeStamp;
     rail.classList.remove('snap');
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
   const dragMove = (e: PointerEvent) => {
-    if (!dragging) return;
+    if (!dragging || !e.isPrimary) return;
+    if (Math.abs(e.clientY - y0) > 6) moved = true;
     const off = offsets();
     const next = Math.min(off.peek, Math.max(off.full, o0 + (e.clientY - y0)));
     rail.style.transform = `translateY(${next}px)`;
@@ -1135,7 +1184,7 @@ function buildMobileLayout(): void {
     lastT = e.timeStamp;
   };
   const dragEnd = (e: PointerEvent) => {
-    if (!dragging) return;
+    if (!dragging || !e.isPrimary) return;
     dragging = false;
     const off = offsets();
     const cur = o0 + (e.clientY - y0);
@@ -1156,7 +1205,9 @@ function buildMobileLayout(): void {
     surf.addEventListener('pointercancel', dragEnd);
   }
   handle.onclick = () => {
-    if (Math.abs(vel) < 0.01) sheetTo(pos === 'peek' ? 'half' : pos === 'half' ? 'full' : 'peek');
+    // A drag's trailing click must not double-jump the snap; distance beats
+    // velocity as the tap test (vel is noisy on slow drags).
+    if (!moved) sheetTo(pos === 'peek' ? 'half' : pos === 'half' ? 'full' : 'peek');
   };
 
   planEditorOpen = (open: boolean) => {
@@ -1188,8 +1239,10 @@ function buildMobileLayout(): void {
     bInvite.hidden = !state.solo;
   };
 
-  window.addEventListener('resize', () => sheetTo(pos));
-  sheetTo('half');
+  // Track viewport changes (URL-bar collapse, keyboard) instantly — animating
+  // these made the sheet visibly slide around on its own mid-scroll.
+  window.addEventListener('resize', () => sheetTo(pos, false));
+  sheetTo('half', false); // first placement: don't animate from the CSS 50vh placeholder
   updatePlanBar();
 }
 
@@ -1240,7 +1293,7 @@ function exitSolo(): void {
   renderModes('B');
 }
 
-function locateMe(): void {
+function locateMe(onlyIfIdle = false): void {
   if (!('geolocation' in navigator)) {
     setStatus('Your browser has no location access — type an address instead', 4000);
     return;
@@ -1248,6 +1301,8 @@ function locateMe(): void {
   setStatus('Finding you…');
   navigator.geolocation.getCurrentPosition(
     (pos) => {
+      // Boot-time locate resolves seconds in — don't yank a session in progress.
+      if (onlyIfIdle && userInteracted) return;
       enterSolo({ lat: pos.coords.latitude, lng: pos.coords.longitude }, 'My location 📍', true);
     },
     () => {
@@ -1426,7 +1481,7 @@ if (shared.solo && shared.a) {
   // intro CTA is the first-visit gesture, returning visitors get the browser
   // prompt / a prior grant.
   enterSolo(state.A.pt, '', true);
-  if (localStorage.getItem('w2m:intro')) locateMe();
+  if (localStorage.getItem('w2m:intro')) locateMe(true);
 }
 
 function applyNames(): void {
