@@ -1428,8 +1428,14 @@ body {
     border-radius: 16px 16px 0 0;
     box-shadow: 0 -8px 32px rgba(31, 38, 23, 0.22);
     transform: translateY(50vh);
-    overflow: hidden;
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    /* Scrollable at EVERY snap position — an overflow:hidden half sheet made
+       the list a swipe dead-zone. The sheet itself moves only via the grip. */
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    /* The rail is 100dvh tall but sits --sheet-off px down; pad the bottom by
+       the same amount or the last rows can never scroll into view. */
+    padding-bottom: calc(var(--sheet-off, 0px) + env(safe-area-inset-bottom, 0px));
   }
 
   #rail.snap {
@@ -1437,11 +1443,16 @@ body {
   }
 
   #rail.at-full {
-    overflow-y: auto;
     border-radius: 0;
   }
 
   #sheet-handle {
+    /* Sticky so the grip survives list scrolling — otherwise a scrolled sheet
+       has no drag surface left and can't be pulled down again. */
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--rail);
     padding: 8px 0 6px;
     touch-action: none;
     cursor: grab;
