@@ -817,12 +817,17 @@ function setStatus(msg: string, autoHide = 0): void {
 // ── Recompute pipeline ───────────────────────────────────────
 let pending = 0;
 let pendingVenuesOnly = true;
+let computeToastShown = false;
 
 function scheduleRecompute(venuesOnly = false): void {
   pendingVenuesOnly = pendingVenuesOnly && venuesOnly; // a full request never downgrades
   updatePlanBar();
   window.clearTimeout(pending);
-  setStatus(isSolo() ? 'Finding spots near you…' : 'Computing fair zones…');
+  // Venue-only refreshes (filter chips) are quick — a toast per tap reads as flicker.
+  if (!venuesOnly && !computeToastShown) {
+    computeToastShown = true;
+    setStatus(isSolo() ? 'Finding spots near you…' : 'Computing fair zones…');
+  }
   pending = window.setTimeout(() => {
     const vo = pendingVenuesOnly;
     pendingVenuesOnly = true;
@@ -834,6 +839,7 @@ function scheduleRecompute(venuesOnly = false): void {
 let lastSolo: TimeField | null = null;
 let lastLayers: ComboLayer[] = [];
 let lastGroup: GroupLayer | null = null;
+let coreVersion = 0; // bumped when the core is rebuilt — keys the heat cache
 
 function coreReady(): boolean {
   if (isSolo()) return lastSolo !== null;
@@ -854,9 +860,13 @@ function recompute(venuesOnly: boolean): void {
     } else {
       lastGroup = groupLayer(state.people.map((p) => getField(p)), state.lambda);
     }
+    coreVersion++;
   }
   renderVenues(); // heat follows the venue list (drawn at the end of renderVenues)
-  setStatus('Ready', 900);
+  if (computeToastShown) {
+    computeToastShown = false;
+    setStatus('Ready', 900);
+  }
 }
 
 // ── Heat over the recommended zone ───────────────────────────
@@ -867,6 +877,7 @@ const HEAT_BOUNDS = L.latLngBounds([GRID.latMin, GRID.lngMin], [GRID.latMax, GRI
 let heatOverlay: L.ImageOverlay | null = null;
 
 let shownVenueCells: number[] = []; // grid cells of the currently listed venues
+let heatKey = ''; // inputs of the last rendered heat image
 
 function setHeat(url: string, opacity: number): void {
   if (!heatOverlay) {
@@ -878,6 +889,10 @@ function setHeat(url: string, opacity: number): void {
 }
 
 function drawContours(): void {
+  // Identical inputs → identical image. Skip the canvas render and the
+  // full-screen re-rasterize that used to run on every list repaint.
+  const key = `${coreVersion}:${nPeople()}:${state.bias}:${state.lambda}:${shownVenueCells.join(',')}`;
+  if (key === heatKey && heatOverlay) return;
   if (isSolo() && lastSolo) {
     // Closeness gradient: green ≤5′ from you, yellow ~15′, purple 25′+.
     const t0 = maskField(lastSolo.slice(), LANDMASK);
@@ -887,6 +902,7 @@ function drawContours(): void {
       gap[i] = isFinite(t) ? Math.max(-14, Math.min(14, ((t - 15) / 10) * 14)) : 14;
     }
     setHeat(renderHeat(gap, shownVenueCells, GRID, 0).toDataURL(), 0.4);
+    heatKey = key;
     return;
   }
   if (isDuo() && lastLayers.length) {
@@ -895,6 +911,7 @@ function drawContours(): void {
     const gap = new Float32Array(CELLS);
     for (let i = 0; i < CELLS; i++) gap[i] = minA[i] - minB[i];
     setHeat(renderHeat(gap, shownVenueCells, GRID, state.bias).toDataURL(), 0.78);
+    heatKey = key;
     return;
   }
   if (isGroup() && lastGroup) {
@@ -903,6 +920,7 @@ function drawContours(): void {
     // scores are the λ-blended groupLayer output.
     const masked = maskField(lastGroup.scores.slice(), LANDMASK);
     setHeat(renderGroupBenefit(masked, shownVenueCells, GRID).toDataURL(), 0.75);
+    heatKey = key;
   }
 }
 
@@ -1267,73 +1285,123 @@ function rankVenues(filtered: Venue[]): Ranked[] {
     }));
 }
 
-function renderVenues(): void {
-  venueLayer.clearLayers();
+// Keyed render caches — reuse list rows and map pins across renders instead
+// of tearing down 40 DOM nodes + 40 Leaflet markers per recompute.
+const pinCache = new Map<string, { marker: L.Marker; sig: string }>();
+const liCache = new Map<string, { li: HTMLLIElement; sig: string }>();
+let lastListSig = '';
+
+function renderVenues(force = true): void {
   const listEl = document.getElementById('venues')!;
   const headEl = document.getElementById('venues-head')!;
-  listEl.innerHTML = '';
 
   const filtered = filteredVenues();
   const scored = rankVenues(filtered);
 
-  headEl.textContent = isSolo()
+  const head = isSolo()
     ? `Near you · ${scored.length}`
     : isDuo()
       ? `Best spots · ${scored.length}`
       : `Fair for all ${nPeople()} · ${scored.length}`;
+
+  // Favorites float to the top.
+  const favs = loadFavs(...favPts());
+  const ordered = [...scored.filter((x) => favs.has(x.v.id)), ...scored.filter((x) => !favs.has(x.v.id))];
+  const maxScore = Math.max(...scored.map((x) => x.finalScore)) || 1;
+
+  // Everything the user can see, in order. A repaint whose rows match what is
+  // already shown changes nothing — skip it (and the mid-read reshuffle).
+  const sig =
+    head +
+    '§' +
+    ordered
+      .map(({ v, refined, finalScore, headline }) => `${v.id}:${headline}:${refined ? 1 : 0}:${favs.has(v.id) ? 1 : 0}:${heatColor(finalScore / maxScore)}`)
+      .join('|');
+  if (!force && sig === lastListSig) return;
+  lastListSig = sig;
+
+  headEl.textContent = head;
 
   if (!scored.length) {
     const hint = state.emojiFilter.size
       ? 'clear the emoji filter on the map, widen filters, or move a pin'
       : 'widen filters or move a pin';
     listEl.innerHTML = `<li class="empty">No venues in the fair zone — ${hint}.</li>`;
+    for (const [, { marker }] of pinCache) venueLayer.removeLayer(marker);
+    pinCache.clear();
+    liCache.clear();
     shownVenueCells = [];
     drawContours();
-    renderShortlist(loadFavs(...favPts()));
+    renderShortlist(favs);
     syncUrl();
     return;
   }
 
-  // Favorites float to the top.
-  const favs = loadFavs(...favPts());
-  const ordered = [...scored.filter((x) => favs.has(x.v.id)), ...scored.filter((x) => !favs.has(x.v.id))];
-
-  const maxScore = Math.max(...scored.map((x) => x.finalScore)) || 1;
+  const seen = new Set<string>();
+  const frag = document.createDocumentFragment();
   for (const { v, refined, finalScore, headline } of ordered) {
+    seen.add(v.id);
     const isFav = favs.has(v.id);
     // Ring color: fully-vegan MTA green, vegan-friendly fainter; fav = pink.
     const ring = isFav ? '#ff2d78' : v.vegan === 2 ? '#00e05c' : v.vegan === 1 ? '#7dedaa' : '#fff';
-    const pin = L.marker([v.lat, v.lng], {
-      icon: L.divIcon({
-        className: '',
-        html: `<div class="venue-pin${v.rating != null && v.rating >= 4.5 ? ' top-rated' : ''}" style="background:${heatColor(finalScore / maxScore)};border-color:${ring}">${venueEmoji(v)}${v.vegan === 2 ? '<span class="pin-leaf">🌱</span>' : ''}${isFav ? '<span class="pin-fav">♥</span>' : ''}</div>`,
-        iconSize: [26, 26],
-        iconAnchor: [13, 13],
-      }),
-    }).addTo(venueLayer);
-    if (!IS_TOUCH && !IS_MOBILE) pin.bindTooltip(tipHtml(v), { direction: 'top', offset: [0, -12], className: 'venue-tip' });
-    pin.on('click', () => showDetail(v));
+    const fill = heatColor(finalScore / maxScore);
 
-    const li = document.createElement('li');
-    if (isFav) li.className = 'faved';
-    const meta = metaLine(v);
-    li.innerHTML =
-      `<span class="v-name">${venueEmoji(v)} ${esc(v.name)}</span>` +
-      `<span class="v-side"><button class="fav-btn${isFav ? ' on' : ''}" title="favorite">♥</button>` +
-      `<span class="v-times">${refined ? '<span class="routed" title="street-routed times">⚡</span>' : ''}${headline}</span></span>` +
-      (meta ? `<span class="v-meta">${meta}</span>` : '') +
-      `<span class="v-tags">${venueTags(v)}</span>`;
-    li.querySelector<HTMLButtonElement>('.fav-btn')!.onclick = (e) => {
-      e.stopPropagation();
-      toggleFav(...favPts(), v.id);
-      renderVenues();
-    };
-    li.onclick = () => {
-      map.setView([v.lat, v.lng], Math.max(map.getZoom(), 14));
-      showDetail(v);
-    };
-    listEl.appendChild(li);
+    const pinSig = `${fill}|${ring}|${isFav ? 1 : 0}`;
+    const cachedPin = pinCache.get(v.id);
+    if (!cachedPin || cachedPin.sig !== pinSig) {
+      // 34px hit box around the 26px pin — bare 26px is a hard touch target.
+      const icon = L.divIcon({
+        className: '',
+        html: `<div class="venue-hit"><div class="venue-pin${v.rating != null && v.rating >= 4.5 ? ' top-rated' : ''}" style="background:${fill};border-color:${ring}">${venueEmoji(v)}${v.vegan === 2 ? '<span class="pin-leaf">🌱</span>' : ''}${isFav ? '<span class="pin-fav">♥</span>' : ''}</div></div>`,
+        iconSize: [34, 34],
+        iconAnchor: [17, 17],
+      });
+      if (cachedPin) {
+        cachedPin.marker.setIcon(icon);
+        cachedPin.sig = pinSig;
+      } else {
+        const pin = L.marker([v.lat, v.lng], { icon }).addTo(venueLayer);
+        if (!IS_TOUCH && !IS_MOBILE) pin.bindTooltip(tipHtml(v), { direction: 'top', offset: [0, -12], className: 'venue-tip' });
+        pin.on('click', () => showDetail(v));
+        pinCache.set(v.id, { marker: pin, sig: pinSig });
+      }
+    }
+
+    const rowSig = `${headline}:${refined ? 1 : 0}:${isFav ? 1 : 0}`;
+    let entry = liCache.get(v.id);
+    if (!entry || entry.sig !== rowSig) {
+      const li = document.createElement('li');
+      if (isFav) li.className = 'faved';
+      const meta = metaLine(v);
+      li.innerHTML =
+        `<span class="v-name">${venueEmoji(v)} ${esc(v.name)}</span>` +
+        `<span class="v-side"><button class="fav-btn${isFav ? ' on' : ''}" title="favorite">♥</button>` +
+        `<span class="v-times">${refined ? '<span class="routed" title="street-routed times">⚡</span>' : ''}${headline}</span></span>` +
+        (meta ? `<span class="v-meta">${meta}</span>` : '') +
+        `<span class="v-tags">${venueTags(v)}</span>`;
+      li.querySelector<HTMLButtonElement>('.fav-btn')!.onclick = (e) => {
+        e.stopPropagation();
+        toggleFav(...favPts(), v.id);
+        renderVenues();
+      };
+      li.onclick = () => {
+        map.setView([v.lat, v.lng], Math.max(map.getZoom(), 14));
+        showDetail(v);
+      };
+      entry = { li, sig: rowSig };
+      liCache.set(v.id, entry);
+    }
+    frag.appendChild(entry.li);
   }
+  listEl.replaceChildren(frag);
+
+  for (const [id, { marker }] of pinCache) {
+    if (!seen.has(id)) {
+      venueLayer.removeLayer(marker);
+      pinCache.delete(id);
+    }
+  }
+  for (const id of [...liCache.keys()]) if (!seen.has(id)) liCache.delete(id);
 
   void refineVenues(scored.map((x) => x.v));
   shownVenueCells = scored.map((x) => pointToCell(GRID, x.v));
