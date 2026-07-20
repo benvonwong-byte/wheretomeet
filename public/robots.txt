@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://benvonwong-byte.github.io/wheretomeet/sitemap.xml
+Sitemap: https://thyme-and-place.com/sitemap.xml
